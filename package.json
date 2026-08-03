@@ -1,0 +1,107 @@
+{
+  "name": "vsocde-plugin-ats362x-build",
+  "displayName": "ATS362X 构建与烧录",
+  "description": "在 VS Code 中完成 ATS362X 项目编译、USB/HID DFU、固件烧录、校验与全擦除。",
+  "version": "0.1.0",
+  "publisher": "Liu0345",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Liu0345/vsocde-plugin-ats362x-build.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other",
+    "Debuggers"
+  ],
+  "keywords": [
+    "ats362x",
+    "baton",
+    "actions-flash",
+    "dfu",
+    "firmware"
+  ],
+  "activationEvents": [
+    "onView:ats362xBuild.sidebar",
+    "onCommand:ats362xBuild.open",
+    "onCommand:ats362xBuild.selectProject"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "ats362xBuild.open",
+        "title": "ATS362X：打开构建与烧录面板"
+      },
+      {
+        "command": "ats362xBuild.selectProject",
+        "title": "ATS362X：选择项目目录"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ats362xBuild",
+          "title": "ATS362X",
+          "icon": "media/ats362x.svg"
+        }
+      ]
+    },
+    "views": {
+      "ats362xBuild": [
+        {
+          "id": "ats362xBuild.sidebar",
+          "name": "构建与烧录",
+          "type": "webview"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "ATS362X Build",
+      "properties": {
+        "ats362xBuild.batonPath": {
+          "type": "string",
+          "default": "baton",
+          "description": "baton 可执行文件路径。"
+        },
+        "ats362xBuild.actionsFlashPath": {
+          "type": "string",
+          "default": "actions-flash",
+          "description": "actions-flash 可执行文件路径。"
+        },
+        "ats362xBuild.hidAckTimeoutMs": {
+          "type": "number",
+          "default": 2500,
+          "minimum": 200,
+          "description": "HID DFU 单帧 ACK 等待时间（毫秒）。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "clean": "rm -rf dist dist-webview",
+    "build:ext": "tsc -p tsconfig.json",
+    "build:webview": "vite build",
+    "build": "npm run clean && npm run build:webview && npm run build:ext",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p webview/tsconfig.json --noEmit",
+    "test": "npm run build:ext && node --test test/*.test.cjs",
+    "package:vsix": "npm run build && vsce package"
+  },
+  "dependencies": {
+    "node-hid": "^3.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@types/vscode": "^1.90.0",
+    "@vitejs/plugin-react": "^4.4.0",
+    "@vscode/vsce": "^3.6.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.8.0",
+    "vite": "^5.4.0"
+  }
+}

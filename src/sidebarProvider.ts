@@ -8,29 +8,51 @@ import { HidDfuService } from './services/hidDfu';
 import { ProjectStore, isAriaWorkspace } from './services/projectStore';
 import { TerminalRunner } from './services/terminalRunner';
 import { inspectTools } from './services/tooling';
+import { listSerialPorts } from './services/serialPorts';
+import { listUsbDfuDevices, UsbDfuService } from './services/usbDfu';
 
 export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
-  private state: ProjectState = { recentProjects: [], discoveredFirmware: [], tools: [] };
+  private panel?: vscode.WebviewPanel;
+  private readonly webviews = new Set<vscode.Webview>();
+  private state: ProjectState = { recentProjects: [], discoveredFirmware: [], serialPorts: [], tools: [] };
   private readonly terminal = new TerminalRunner();
   private readonly hid = new HidDfuService();
+  private readonly usbDfu = new UsbDfuService();
+  private readonly usbDfuOutput = vscode.window.createOutputChannel('ATS362X USB DFU');
 
   public constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly projects: ProjectStore
-  ) {}
+  ) {
+    this.context.subscriptions.push(this.usbDfuOutput);
+  }
 
   public async resolveWebviewView(view: vscode.WebviewView): Promise<void> {
     this.view = view;
-    view.webview.options = {
-      enableScripts: true,
-      localResourceRoots: [
-        vscode.Uri.joinPath(this.context.extensionUri, 'dist-webview')
-      ]
-    };
-    view.webview.html = this.html(view.webview);
-    view.webview.onDidReceiveMessage((message: WebviewToExtension) => {
-      void this.handle(message);
+    this.configureWebview(view.webview);
+    view.onDidDispose(() => this.webviews.delete(view.webview));
+    await this.refresh();
+  }
+
+  /** 在编辑区打开或复用完整控制台页面。 */
+  public async openPanel(): Promise<void> {
+    if (this.panel) {
+      this.panel.reveal(vscode.ViewColumn.One);
+      this.post({ type: 'state', state: this.state });
+      return;
+    }
+    const panel = vscode.window.createWebviewPanel(
+      'ats362xBuild.console',
+      'ATS362X 构建与烧录',
+      vscode.ViewColumn.One,
+      { enableScripts: true, retainContextWhenHidden: true }
+    );
+    this.panel = panel;
+    this.configureWebview(panel.webview);
+    panel.onDidDispose(() => {
+      this.webviews.delete(panel.webview);
+      this.panel = undefined;
     });
     await this.refresh();
   }
@@ -69,7 +91,7 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
         if (stat.isDirectory()) {
           const entries = await fs.readdir(override, { withFileTypes: true });
           overrideFiles = entries
-            .filter((entry) => entry.isFile() && ['.bin', '.fw', '.img', '.hex'].includes(path.extname(entry.name).toLowerCase()))
+            .filter((entry) => entry.isFile() && ['.bin', '.dfu', '.fw', '.img', '.hex'].includes(path.extname(entry.name).toLowerCase()))
             .map((entry) => path.join(override, entry.name));
         } else {
           overrideFiles = [override];
@@ -84,6 +106,7 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
       firmwareOverride: override,
       defaultFirmwareDirectory: discovery.defaultDirectory,
       discoveredFirmware: [...overrideFiles, ...discovery.files.filter((file) => !overrideFiles.includes(file))],
+      serialPorts: await listSerialPorts(),
       tools: await inspectTools(),
       busy: this.state.busy
     };
@@ -96,6 +119,9 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
         case 'ready':
         case 'refresh':
           await this.refresh();
+          break;
+        case 'openPanel':
+          await this.openPanel();
           break;
         case 'selectProject':
           await this.selectProject();
@@ -115,6 +141,12 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
         case 'selectFirmware':
           await this.selectFirmware(false);
           break;
+        case 'selectHidFirmware':
+          await this.selectFirmware(false, ['bin']);
+          break;
+        case 'selectUsbDfuFirmware':
+          await this.selectFirmware(false, ['bin', 'dfu']);
+          break;
         case 'selectFirmwareDirectory':
           await this.selectFirmware(true);
           break;
@@ -126,7 +158,26 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
           await this.run(message.request);
           break;
         case 'listHid':
-          this.post({ type: 'hidDevices', devices: this.hid.list() });
+          this.post({ type: 'hidDevices', devices: await this.hid.list() });
+          break;
+        case 'listUsbDfu':
+          this.post({
+            type: 'usbDfuDevices',
+            devices: await listUsbDfuDevices(
+              vscode.workspace.getConfiguration('ats362xBuild').get<string>('dfuUtilPath', 'dfu-util')
+            )
+          });
+          break;
+        case 'usbDfu':
+          await this.runUsbDfu(message.device, message.firmware, message.reset);
+          break;
+        case 'usbDfuAbort':
+          this.usbDfu.cancel();
+          this.notice('warning', '正在取消 USB DFU…');
+          break;
+        case 'listSerial':
+          this.state.serialPorts = await listSerialPorts();
+          this.post({ type: 'state', state: this.state });
           break;
         case 'hidDfu':
           await this.runHidDfu(message.path, message.firmware, message.expectedBcd);
@@ -143,7 +194,7 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async selectFirmware(directory: boolean): Promise<void> {
+  private async selectFirmware(directory: boolean, extensions = ['bin', 'dfu', 'fw', 'img', 'hex']): Promise<void> {
     const base = this.projects.firmwareOverride ?? this.state.defaultFirmwareDirectory ?? this.projects.selectedProject;
     const result = await vscode.window.showOpenDialog({
       title: directory ? '选择固件目录' : '选择固件文件',
@@ -151,7 +202,7 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
       canSelectFolders: directory,
       canSelectMany: false,
       defaultUri: base ? vscode.Uri.file(base) : undefined,
-      filters: directory ? undefined : { 'ATS362X 固件': ['bin', 'fw', 'img', 'hex'], '所有文件': ['*'] },
+      filters: directory ? undefined : { 'ATS362X 固件': extensions },
       openLabel: directory ? '使用该目录' : '使用该固件'
     });
     if (result?.[0]) {
@@ -165,8 +216,11 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
     if (!cwd) throw new Error('请先选择项目目录');
     const preference = request.action === 'extractFw' || request.options.method === 'fw-usb' || request.options.method === 'fw-uart'
       ? 'fw'
-      : request.options.method === 'ota-uart' ? 'ota' : 'any';
-    const firmware = chooseFirmware(undefined, this.state.discoveredFirmware, preference);
+      : request.options.method === 'ota-uart' || request.action === 'usbDfu' ? 'ota' : 'any';
+    const explicitFirmware = typeof request.options.firmware === 'string' && request.options.firmware.length > 0
+      ? request.options.firmware
+      : undefined;
+    const firmware = chooseFirmware(explicitFirmware, this.state.discoveredFirmware, preference);
     const command = buildCommand(request, firmware);
     await this.terminal.run(command, cwd);
     this.notice('info', `已在终端运行：${command.executable} ${command.args.join(' ')}`);
@@ -192,8 +246,43 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private async runUsbDfu(
+    device: import('./types').UsbDfuDeviceInfo,
+    firmware: string,
+    reset: boolean
+  ): Promise<void> {
+    const selected = firmware || chooseFirmware(undefined, this.state.discoveredFirmware, 'ota');
+    if (!selected) throw new Error('没有找到可用于 USB DFU 的 .bin/.dfu 固件');
+    if (!['.bin', '.dfu'].includes(path.extname(selected).toLowerCase())) {
+      throw new Error('USB DFU 需要选择 .bin 或 .dfu 固件');
+    }
+    const executable = vscode.workspace.getConfiguration('ats362xBuild').get<string>('dfuUtilPath', 'dfu-util');
+    this.state.busy = 'usbDfu';
+    this.post({ type: 'state', state: this.state });
+    this.usbDfuOutput.clear();
+    this.usbDfuOutput.appendLine(`设备：${device.vendorId.toString(16).padStart(4, '0')}:${device.productId.toString(16).padStart(4, '0')} @ ${device.usbPath}`);
+    this.usbDfuOutput.appendLine(`固件：${selected}`);
+    this.usbDfuOutput.show(true);
+    try {
+      await this.usbDfu.upload(
+        executable,
+        device,
+        selected,
+        reset,
+        (percent, detail) => this.post({ type: 'progress', action: 'usbDfu', percent, detail }),
+        (text) => this.usbDfuOutput.append(text)
+      );
+      this.notice('info', 'USB DFU 传输完成');
+    } finally {
+      this.state.busy = undefined;
+      this.post({ type: 'state', state: this.state });
+    }
+  }
+
   private post(message: ExtensionToWebview): void {
-    void this.view?.webview.postMessage(message);
+    for (const webview of this.webviews) {
+      void webview.postMessage(message);
+    }
   }
 
   private notice(level: 'info' | 'warning' | 'error', message: string): void {
@@ -215,6 +304,18 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
 </head>
 <body><div id="root"></div><script nonce="${nonce}" src="${script}"></script></body>
 </html>`;
+  }
+
+  private configureWebview(webview: vscode.Webview): void {
+    webview.options = {
+      enableScripts: true,
+      localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'dist-webview')]
+    };
+    webview.html = this.html(webview);
+    this.webviews.add(webview);
+    webview.onDidReceiveMessage((message: WebviewToExtension) => {
+      void this.handle(message);
+    });
   }
 }
 

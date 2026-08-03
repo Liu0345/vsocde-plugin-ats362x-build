@@ -10,9 +10,15 @@ test('build maps download and remote host to Baton arguments', () => {
   });
 });
 
-test('USB DFU uses Baton dfu method and selected firmware', () => {
-  const command = buildCommand({ action: 'flash', options: { method: 'dfu', verify: 'enum' } }, '/tmp/fw image.bin');
-  assert.deepEqual(command.args, ['flash', '/tmp/fw image.bin', '--method', 'dfu', '--verify', 'enum']);
+test('USB DFU pins the selected UAC device by VID/PID and physical path', () => {
+  const command = buildCommand({
+    action: 'usbDfu',
+    options: { vidPid: '20b1:301f', usbPath: '0-1.2', alt: 0, reset: true }
+  }, '/tmp/fw image.bin');
+  assert.deepEqual(command, {
+    executable: 'dfu-util',
+    args: ['-d', '20b1:301f', '-p', '0-1.2', '-a', '0', '-D', '/tmp/fw image.bin', '-R']
+  });
 });
 
 test('full erase is marked destructive unless dry-run is enabled', () => {

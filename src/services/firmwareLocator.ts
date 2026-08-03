@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
-const FIRMWARE_SUFFIXES = ['.fw', '.bin', '.img', '.hex'];
+const FIRMWARE_SUFFIXES = ['.fw', '.bin', '.dfu', '.img', '.hex'];
 
 export interface FirmwareDiscovery {
   defaultDirectory?: string;

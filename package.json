@@ -2,7 +2,7 @@
   "name": "vsocde-plugin-ats362x-build",
   "displayName": "ATS362X 构建与烧录",
   "description": "在 VS Code 中完成 ATS362X 项目编译、USB/HID DFU、固件烧录、校验与全擦除。",
-  "version": "0.1.0",
+  "version": "0.1.16",
   "publisher": "Liu0345",
   "license": "MIT",
   "repository": {
@@ -71,6 +71,11 @@
           "default": "actions-flash",
           "description": "actions-flash 可执行文件路径。"
         },
+        "ats362xBuild.dfuUtilPath": {
+          "type": "string",
+          "default": "dfu-util",
+          "description": "dfu-util 可执行文件路径，用于扫描并更新标准 USB DFU 设备。"
+        },
         "ats362xBuild.hidAckTimeoutMs": {
           "type": "number",
           "default": 2500,
@@ -90,7 +95,8 @@
     "package:vsix": "npm run build && vsce package"
   },
   "dependencies": {
-    "node-hid": "^3.2.0"
+    "node-hid": "^3.2.0",
+    "serialport": "^13.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.17.0",

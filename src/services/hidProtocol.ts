@@ -76,10 +76,13 @@ export function parseFrame(report: Buffer): ParsedFrame {
   };
 }
 
-export function makeBeginPayload(image: Buffer, expectedBcd: number): Buffer {
+export function makeBeginPayload(imageSize: number, imageCrc32: number, expectedBcd: number): Buffer {
+  if (!Number.isInteger(imageSize) || imageSize <= 0 || imageSize > 0xffffffff) {
+    throw new Error(`HID DFU 镜像长度超出协议范围：${imageSize}`);
+  }
   const payload = Buffer.alloc(10);
-  payload.writeUInt32LE(image.length, 0);
-  payload.writeUInt32LE(crc32IsoHdlc(image), 4);
+  payload.writeUInt32LE(imageSize, 0);
+  payload.writeUInt32LE(imageCrc32 >>> 0, 4);
   payload.writeUInt16LE(expectedBcd & 0xffff, 8);
   return payload;
 }
@@ -116,7 +119,12 @@ export function crc16X25(data: Uint8Array): number {
 }
 
 export function crc32IsoHdlc(data: Uint8Array): number {
-  let crc = 0xffffffff;
+  return crc32IsoHdlcUpdate(0, data);
+}
+
+/** 使用已完成最终异或的上一段 CRC，增量计算下一段数据。 */
+export function crc32IsoHdlcUpdate(previousCrc: number, data: Uint8Array): number {
+  let crc = (previousCrc ^ 0xffffffff) >>> 0;
   for (const value of data) {
     crc ^= value;
     for (let bit = 0; bit < 8; bit += 1) {

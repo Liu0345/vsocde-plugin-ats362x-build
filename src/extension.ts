@@ -12,7 +12,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       webviewOptions: { retainContextWhenHidden: true }
     }),
     vscode.commands.registerCommand('ats362xBuild.open', async () => {
-      await vscode.commands.executeCommand('workbench.view.extension.ats362xBuild');
+      await provider.openPanel();
     }),
     vscode.commands.registerCommand('ats362xBuild.selectProject', async () => {
       await provider.selectProject();

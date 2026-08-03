@@ -9,9 +9,11 @@ export async function inspectTools(): Promise<ToolStatus[]> {
   const configuration = vscode.workspace.getConfiguration('ats362xBuild');
   const baton = configuration.get<string>('batonPath', 'baton');
   const actionsFlash = configuration.get<string>('actionsFlashPath', 'actions-flash');
-  const [batonStatus, flashStatus] = await Promise.all([
+  const dfuUtil = configuration.get<string>('dfuUtilPath', 'dfu-util');
+  const [batonStatus, flashStatus, dfuStatus] = await Promise.all([
     inspectExecutable('baton', 'Baton', baton),
-    inspectExecutable('actions-flash', 'Actions Flash', actionsFlash)
+    inspectExecutable('actions-flash', 'Actions Flash', actionsFlash),
+    inspectExecutable('dfu-util', 'USB DFU', dfuUtil)
   ]);
   if (batonStatus.available) {
     try {
@@ -37,12 +39,13 @@ export async function inspectTools(): Promise<ToolStatus[]> {
   return [
     batonStatus,
     flashStatus,
+    dfuStatus,
     { name: 'node-hid', label: 'HID DFU', available: hidAvailable, detail: hidDetail }
   ];
 }
 
 async function inspectExecutable(
-  name: 'baton' | 'actions-flash',
+  name: 'baton' | 'actions-flash' | 'dfu-util',
   label: string,
   executable: string
 ): Promise<ToolStatus> {

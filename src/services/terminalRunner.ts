@@ -20,7 +20,9 @@ export class TerminalRunner {
     const configuration = vscode.workspace.getConfiguration('ats362xBuild');
     const executable = command.executable === 'baton'
       ? configuration.get<string>('batonPath', 'baton')
-      : configuration.get<string>('actionsFlashPath', 'actions-flash');
+      : command.executable === 'actions-flash'
+        ? configuration.get<string>('actionsFlashPath', 'actions-flash')
+        : configuration.get<string>('dfuUtilPath', 'dfu-util');
     const line = [executable, ...command.args].map(shellQuote).join(' ');
 
     if (!this.terminal || this.terminal.exitStatus !== undefined) {

@@ -1,7 +1,8 @@
 import { RunRequest } from '../types';
+import { buildUsbDfuArgs } from './usbDfu';
 
 export interface BuiltCommand {
-  executable: 'baton' | 'actions-flash';
+  executable: 'baton' | 'actions-flash' | 'dfu-util';
   args: string[];
   destructive?: boolean;
 }
@@ -41,6 +42,21 @@ export function buildCommand(request: RunRequest, firmware?: string): BuiltComma
       addOption(args, '--adfu-vid-pid', value.vidPid);
       addFlag(args, '--dry-run', value.dryRun);
       return { executable: 'baton', args };
+    }
+    case 'usbDfu': {
+      if (!firmware) throw new Error('需要先选择 USB DFU 固件');
+      const usbPath = requiredOption(value.usbPath, 'USB DFU 设备路径');
+      const vidPid = requiredOption(value.vidPid, 'USB DFU 设备 VID:PID').split(':');
+      if (vidPid.length !== 2 || vidPid.some((part) => !/^[0-9a-f]{4}$/i.test(part))) {
+        throw new Error('USB DFU 设备 VID:PID 格式无效');
+      }
+      const args = buildUsbDfuArgs({
+        vendorId: Number.parseInt(vidPid[0], 16),
+        productId: Number.parseInt(vidPid[1], 16),
+        usbPath,
+        alt: Number(value.alt ?? 0)
+      }, firmware, value.reset === true);
+      return { executable: 'dfu-util', args };
     }
     case 'verify': {
       const args = ['verify'];
@@ -86,4 +102,11 @@ function addOption(args: string[], name: string, value: unknown): void {
 
 function addFlag(args: string[], name: string, value: unknown): void {
   if (value === true) args.push(name);
+}
+
+function requiredOption(value: unknown, label: string): string {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    throw new Error(`需要先选择${label}`);
+  }
+  return String(value);
 }

@@ -10,6 +10,24 @@ test('build maps download and remote host to Baton arguments', () => {
   });
 });
 
+test('build-flash-verify forwards editable App and Board selections', () => {
+  assert.deepEqual(buildCommand({
+    action: 'buildFlashVerify',
+    options: {
+      buildHost: 'builder-ubuntu',
+      download: 'ota-fw',
+      app: 'application/usb-audio-template',
+      board: 'ats362x_dvb'
+    }
+  }), {
+    executable: 'baton',
+    args: [
+      'build-flash-verify', '--build-host', 'builder-ubuntu', '--download', 'ota-fw',
+      '--app', 'application/usb-audio-template', '--board', 'ats362x_dvb'
+    ]
+  });
+});
+
 test('USB DFU pins the selected UAC device by VID/PID and physical path', () => {
   const command = buildCommand({
     action: 'usbDfu',

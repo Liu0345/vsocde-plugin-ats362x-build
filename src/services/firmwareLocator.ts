@@ -28,7 +28,6 @@ export async function discoverFirmware(projectPath?: string): Promise<FirmwareDi
     defaultDirectory: ranked[0]?.directory,
     files: ranked.flatMap((item) => item.files)
       .sort((left, right) => scoreFirmware(right) - scoreFirmware(left))
-      .slice(0, 30)
   };
 }
 
@@ -68,14 +67,25 @@ async function findKnownFirmwareDirectories(root: string): Promise<string[]> {
 }
 
 async function listFirmwareFiles(directory: string): Promise<string[]> {
-  try {
-    const entries = await fs.readdir(directory, { withFileTypes: true });
-    return entries
-      .filter((entry) => entry.isFile() && FIRMWARE_SUFFIXES.includes(path.extname(entry.name).toLowerCase()))
-      .map((entry) => path.join(directory, entry.name));
-  } catch {
-    return [];
+  const files: string[] = [];
+  const queue: Array<{ directory: string; depth: number }> = [{ directory, depth: 0 }];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    try {
+      const entries = await fs.readdir(current.directory, { withFileTypes: true });
+      for (const entry of entries) {
+        const item = path.join(current.directory, entry.name);
+        if (entry.isFile() && FIRMWARE_SUFFIXES.includes(path.extname(entry.name).toLowerCase())) {
+          files.push(item);
+        } else if (entry.isDirectory() && current.depth < 2 && !entry.name.startsWith('.')) {
+          queue.push({ directory: item, depth: current.depth + 1 });
+        }
+      }
+    } catch {
+      // 构建过程可能替换输出目录，单个目录短暂消失时继续扫描其他目录。
+    }
   }
+  return files;
 }
 
 function scoreFirmware(file: string): number {

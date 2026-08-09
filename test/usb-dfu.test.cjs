@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const { extractDfuPercentages, parseDfuUtilList } = require('../dist/services/usbDfu');
 
@@ -22,4 +24,14 @@ Found DFU: [10d6:10d6] ver=0200, devnum=4, cfg=1, intf=0, path="0-1.3", alt=1, n
 test('dfu-util progress parser handles carriage-return progress output', () => {
   const output = 'Download [====            ]  25%\rDownload [========        ]  50%\rDownload [================] 100%';
   assert.deepEqual(extractDfuPercentages(output), [25, 50, 100]);
+});
+
+test('USB DFU 页面不依赖已选择的项目目录', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'webview', 'src', 'main.tsx'), 'utf8');
+  const startLine = source.split(/\r?\n/).find((line) => line.includes('开始 USB DFU'));
+
+  assert.ok(startLine, 'USB DFU 启动按钮必须存在');
+  assert.doesNotMatch(startLine, /projectPath/, 'USB DFU 不得被项目选择状态限制');
+  assert.match(startLine, /!device/, 'USB DFU 必须要求已选择目标设备');
+  assert.match(startLine, /!hasFirmware/, 'USB DFU 必须要求存在可用固件');
 });

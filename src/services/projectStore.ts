@@ -38,8 +38,10 @@ export class ProjectStore {
   public async selectProject(projectPath: string): Promise<void> {
     const normalized = path.resolve(projectPath);
     await this.context.globalState.update(SELECTED_PROJECT, normalized);
-    const recent = [normalized, ...this.recentProjects.filter((item) => item !== normalized)]
-      .slice(0, MAX_RECENT);
+    const existing = this.recentProjects;
+    const recent = existing.some((item) => path.resolve(item) === normalized)
+      ? existing
+      : [normalized, ...existing].slice(0, MAX_RECENT);
     await this.context.globalState.update(RECENT_PROJECTS, recent);
     await this.context.globalState.update(FIRMWARE_OVERRIDE, undefined);
   }
@@ -48,6 +50,19 @@ export class ProjectStore {
     await this.context.globalState.update(SELECTED_PROJECT, undefined);
     await this.context.globalState.update(RECENT_PROJECTS, []);
     await this.context.globalState.update(FIRMWARE_OVERRIDE, undefined);
+  }
+
+  /** 只移除指定项目的记忆；若它正被选中，同时清除当前选择和固件覆盖。 */
+  public async removeRecentProject(projectPath: string): Promise<void> {
+    const normalized = path.resolve(projectPath);
+    await this.context.globalState.update(
+      RECENT_PROJECTS,
+      this.recentProjects.filter((item) => path.resolve(item) !== normalized)
+    );
+    if (this.selectedProject && path.resolve(this.selectedProject) === normalized) {
+      await this.context.globalState.update(SELECTED_PROJECT, undefined);
+      await this.context.globalState.update(FIRMWARE_OVERRIDE, undefined);
+    }
   }
 
   public async setFirmwareOverride(value?: string): Promise<void> {

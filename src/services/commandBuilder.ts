@@ -26,6 +26,7 @@ export function buildCommand(request: RunRequest, firmware?: string): BuiltComma
       const args = ['build-flash-verify'];
       addOption(args, '--build-host', value.buildHost);
       addOption(args, '--download', value.download);
+      addOption(args, '--app', value.app);
       addOption(args, '--board', value.board);
       return { executable: 'baton', args };
     }

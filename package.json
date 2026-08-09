@@ -1,8 +1,8 @@
 {
   "name": "vsocde-plugin-ats362x-build",
   "displayName": "ATS362X 构建与烧录",
-  "description": "在 VS Code 中完成 ATS362X 项目编译、USB/HID DFU、固件烧录、校验与全擦除。",
-  "version": "0.1.16",
+  "description": "在 VS Code 中完成 ATS362X 项目编译、USB/HID DFU、固件烧录、校验、全擦除与设备身份认证。",
+  "version": "0.1.17",
   "publisher": "Liu0345",
   "license": "MIT",
   "repository": {
@@ -81,6 +81,28 @@
           "default": 2500,
           "minimum": 200,
           "description": "HID DFU 单帧 ACK 等待时间（毫秒）。"
+        },
+        "ats362xBuild.identityTokenUrl": {
+          "type": "string",
+          "default": "https://factory-auth.pawpaw.cn:1984/token",
+          "description": "设备身份认证登录接口。"
+        },
+        "ats362xBuild.identitySnUrl": {
+          "type": "string",
+          "default": "https://factory-auth.pawpaw.cn:1984/pawpaw-harman/sn",
+          "description": "设备身份授权数据申请接口。"
+        },
+        "ats362xBuild.identityCommandTimeoutMs": {
+          "type": "number",
+          "default": 8000,
+          "minimum": 500,
+          "description": "身份认证单条串口命令等待时间（毫秒）。"
+        },
+        "ats362xBuild.identityHttpTimeoutMs": {
+          "type": "number",
+          "default": 15000,
+          "minimum": 1000,
+          "description": "身份认证服务请求超时时间（毫秒）。"
         }
       }
     }

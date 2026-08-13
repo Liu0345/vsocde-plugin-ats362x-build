@@ -382,7 +382,6 @@ const defaultIdentityCommands: IdentityCommands = {
 interface SavedIdentitySettings {
   port?: string;
   baudRate?: string;
-  username?: string;
   commands?: IdentityCommands;
   customCommand?: string;
   rebootAfterWrite?: boolean;
@@ -406,8 +405,8 @@ function IdentityPage({
   const persisted = (vscode.getState()?.identity ?? {}) as SavedIdentitySettings;
   const [port, setPort] = useState(persisted.port ?? '');
   const [baudRate, setBaudRate] = useState(persisted.baudRate ?? '3000000');
-  const [username, setUsername] = useState(persisted.username ?? 'qiushui');
-  const [password, setPassword] = useState('qiushui106');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rebootAfterWrite, setRebootAfterWrite] = useState(persisted.rebootAfterWrite ?? true);
   const [keepPortReserved, setKeepPortReserved] = useState(false);
@@ -418,9 +417,9 @@ function IdentityPage({
     const existing = vscode.getState() ?? {};
     vscode.setState({
       ...existing,
-      identity: { port, baudRate, username, commands, customCommand, rebootAfterWrite }
+      identity: { port, baudRate, commands, customCommand, rebootAfterWrite }
     });
-  }, [port, baudRate, username, commands, customCommand, rebootAfterWrite]);
+  }, [port, baudRate, commands, customCommand, rebootAfterWrite]);
 
   useEffect(() => {
     if (reservationResults[port] !== undefined) setKeepPortReserved(reservationResults[port]);

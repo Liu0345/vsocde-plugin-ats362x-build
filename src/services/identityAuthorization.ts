@@ -192,11 +192,15 @@ export class IdentityAuthorizationService {
 
   private async clearAlgorithm(context: RunContext): Promise<IdentityResult> {
     const peerBefore = await this.checkPeerAuthorization(context, 'algorithm');
+    const clearCommand = validateIsolatedClearCommand(
+      'algorithm',
+      context.request.commands.algorithmClear
+    );
     await this.send(
       context,
       'algorithm',
       '清除算法授权',
-      renderCommand(context.request.commands.algorithmClear, { key: ZERO_KEY, zeroKey: ZERO_KEY }),
+      renderCommand(clearCommand, { key: ZERO_KEY, zeroKey: ZERO_KEY }),
       ['set_key ok']
     );
     await this.rebootAndReconnectIfEnabled(context, 'algorithm');
@@ -255,11 +259,15 @@ export class IdentityAuthorizationService {
 
   private async clearSn(context: RunContext): Promise<IdentityResult> {
     const peerBefore = await this.checkPeerAuthorization(context, 'sn');
+    const clearCommand = validateIsolatedClearCommand(
+      'sn',
+      context.request.commands.snClear
+    );
     await this.send(
       context,
       'sn',
       '清除 SN 授权',
-      renderCommand(context.request.commands.snClear, { key: ZERO_KEY, zeroKey: ZERO_KEY }),
+      renderCommand(clearCommand, { key: ZERO_KEY, zeroKey: ZERO_KEY }),
       ['sn write completed']
     );
     await this.rebootAndReconnectIfEnabled(context, 'sn');
@@ -695,6 +703,31 @@ export function renderCommand(template: string, values: { key: string; zeroKey: 
     throw new Error(`命令模板包含未知占位符：${rendered.match(/\{[^}]+\}/)?.[0]}`);
   }
   return normalizeCommand(rendered);
+}
+
+/**
+ * 清除命令必须限制在对应身份协议内，避免可编辑命令误清除另一套身份。
+ * 允许在协议命令内调整参数，但禁止复合 Shell 命令和使用普通授权密钥占位符。
+ */
+export function validateIsolatedClearCommand(target: 'algorithm' | 'sn', command: string): string {
+  const normalized = normalizeCommand(command);
+  if (/(?:&&|\|\||[;|&<>`]|\$\()/.test(normalized)) {
+    throw new Error('清除授权只允许执行一条隔离的设备命令，不能包含 Shell 连接符、重定向或命令替换');
+  }
+  if (!normalized.includes('{zeroKey}') || normalized.includes('{key}')) {
+    throw new Error('清除授权命令必须且只能使用 {zeroKey} 清除载荷');
+  }
+
+  const expected = target === 'algorithm' ? /^auth_mode(?:\s|$)/i : /^device_id\s+sn(?:\s|$)/i;
+  const peer = target === 'algorithm' ? /\bdevice_id\b/i : /\bauth_mode\b/i;
+  if (!expected.test(normalized) || peer.test(normalized)) {
+    throw new Error(
+      target === 'algorithm'
+        ? '算法清除命令必须独立使用 auth_mode 协议，不能调用 SN 身份命令'
+        : 'SN 清除命令必须独立使用 device_id sn 协议，不能调用算法身份命令'
+    );
+  }
+  return normalized;
 }
 
 function readLengthPrefixedField(output: string, field: string): string {

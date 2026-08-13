@@ -12,11 +12,14 @@ import { checkSerialPortAvailability, listSerialPorts, SerialPortReservation } f
 import { listUsbDfuDevices, UsbDfuService } from './services/usbDfu';
 import { IdentityAuthorizationService } from './services/identityAuthorization';
 import { discoverBuildOptions } from './services/buildOptions';
+import { isWebviewDisposedError, WebviewRegistry } from './services/webviewRegistry';
 
 export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private panel?: vscode.WebviewPanel;
-  private readonly webviews = new Set<vscode.Webview>();
+  private readonly webviews = new WebviewRegistry<vscode.Webview>((error) => {
+    console.error('[ATS362X] Webview message delivery failed', error);
+  });
   private state: ProjectState = { recentProjects: [], discoveredFirmware: [], serialPorts: [], tools: [], buildOptions: [] };
   private readonly terminal = new TerminalRunner();
   private readonly hid = new HidDfuService();
@@ -43,16 +46,26 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
   public async resolveWebviewView(view: vscode.WebviewView): Promise<void> {
     this.view = view;
     this.configureWebview(view.webview);
-    view.onDidDispose(() => this.webviews.delete(view.webview));
+    view.onDidDispose(() => {
+      this.webviews.unregister(view.webview);
+      if (this.view === view) this.view = undefined;
+    });
     await this.refresh();
   }
 
   /** 在编辑区打开或复用完整控制台页面。 */
   public async openPanel(): Promise<void> {
     if (this.panel) {
-      this.panel.reveal(vscode.ViewColumn.One);
-      this.post({ type: 'state', state: this.state });
-      return;
+      const existing = this.panel;
+      try {
+        existing.reveal(vscode.ViewColumn.One);
+        this.post({ type: 'state', state: this.state });
+        return;
+      } catch (error) {
+        this.webviews.unregister(existing.webview);
+        if (this.panel === existing) this.panel = undefined;
+        if (!isWebviewDisposedError(error)) throw error;
+      }
     }
     const panel = vscode.window.createWebviewPanel(
       'ats362xBuild.console',
@@ -60,11 +73,11 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
       vscode.ViewColumn.One,
       { enableScripts: true, retainContextWhenHidden: true }
     );
-    this.panel = panel;
     this.configureWebview(panel.webview);
+    this.panel = panel;
     panel.onDidDispose(() => {
-      this.webviews.delete(panel.webview);
-      this.panel = undefined;
+      this.webviews.unregister(panel.webview);
+      if (this.panel === panel) this.panel = undefined;
     });
     await this.refresh();
   }
@@ -239,6 +252,9 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
           break;
       }
     } catch (error) {
+      // A user may close the editor while an asynchronous command is finishing.
+      // The disposal is expected lifecycle behavior and must not poison later opens.
+      if (isWebviewDisposedError(error)) return;
       const messageText = error instanceof Error ? error.message : String(error);
       this.notice('error', messageText);
       void vscode.window.showErrorMessage(`ATS362X：${messageText}`);
@@ -480,9 +496,7 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private post(message: ExtensionToWebview): void {
-    for (const webview of this.webviews) {
-      void webview.postMessage(message);
-    }
+    this.webviews.post(message);
   }
 
   private notice(level: 'info' | 'warning' | 'error', message: string): void {
@@ -512,7 +526,7 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'dist-webview')]
     };
     webview.html = this.html(webview);
-    this.webviews.add(webview);
+    this.webviews.register(webview);
     webview.onDidReceiveMessage((message: WebviewToExtension) => {
       void this.handle(message);
     });

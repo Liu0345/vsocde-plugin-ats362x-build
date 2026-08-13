@@ -8,14 +8,22 @@ const {
   parseSnStatus,
   renderCommand,
   encodeAuthorizationLoginBody,
-  normalizeAuthorizationKey
+  normalizeAuthorizationKey,
+  validateIsolatedClearCommand
 } = require('../dist/services/identityAuthorization.js');
 const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', 'services', 'identityAuthorization.ts'), 'utf8');
+const webviewSource = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'webview', 'src', 'main.tsx'), 'utf8');
 
 test('授权登录按 OAuth2 表单提交账号和密码', () => {
-  const form = new URLSearchParams(encodeAuthorizationLoginBody('qiushui', 'qiushui106'));
-  assert.equal(form.get('username'), 'qiushui');
-  assert.equal(form.get('password'), 'qiushui106');
+  const form = new URLSearchParams(encodeAuthorizationLoginBody('operator', 'example-secret'));
+  assert.equal(form.get('username'), 'operator');
+  assert.equal(form.get('password'), 'example-secret');
+});
+
+test('授权账号和密码默认留空且不写入 Webview 持久化状态', () => {
+  assert.match(webviewSource, /const \[username, setUsername\] = useState\(''\)/);
+  assert.match(webviewSource, /const \[password, setPassword\] = useState\(''\)/);
+  assert.doesNotMatch(webviewSource, /identity:\s*\{[^}]*username/);
 });
 
 test('授权密钥兼容服务端非纯十六进制格式', () => {
@@ -82,6 +90,33 @@ test('两套清除命令独立并交叉确认另一项状态不变', () => {
   assert.match(snClear, /checkPeerAuthorization\(context, 'sn'\)/);
   assert.doesNotMatch(snClear, /commands\.algorithmClear/);
   assert.match(source, /清除当前授权后\$\{peerName\}状态发生变化/);
+});
+
+test('清除命令强制限制在各自身份协议内', () => {
+  assert.equal(
+    validateIsolatedClearCommand('algorithm', 'auth_mode set_key {zeroKey}'),
+    'auth_mode set_key {zeroKey}'
+  );
+  assert.equal(
+    validateIsolatedClearCommand('sn', 'device_id sn write {zeroKey} --force'),
+    'device_id sn write {zeroKey} --force'
+  );
+  assert.throws(
+    () => validateIsolatedClearCommand('algorithm', 'device_id sn write {zeroKey} --force'),
+    /不能调用 SN 身份命令/
+  );
+  assert.throws(
+    () => validateIsolatedClearCommand('sn', 'auth_mode set_key {zeroKey}'),
+    /不能调用算法身份命令/
+  );
+  assert.throws(
+    () => validateIsolatedClearCommand('algorithm', 'auth_mode set_key {zeroKey}; device_id sn write {zeroKey} --force'),
+    /只允许执行一条隔离的设备命令/
+  );
+  assert.throws(
+    () => validateIsolatedClearCommand('sn', 'device_id sn write {key} --force'),
+    /必须且只能使用 \{zeroKey\}/
+  );
 });
 
 test('两套授权状态独立解析', () => {

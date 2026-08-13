@@ -39,7 +39,7 @@ dfu-util --version
 
 HID DFU 需要设备固件启用兼容的 HID 更新模块，并枚举 DSPTuner 普通 HID 接口。VSIX 包含 `node-hid` 的 macOS、Linux 与 Windows 常用架构预编译模块。
 
-身份认证默认使用 `qiushui` / `qiushui106`，密码仅保存在当前界面内存中，不写入 Webview 持久化状态。授权命令提供可编辑默认值；`{key}` 表示授权服务返回的数据，`{zeroKey}` 表示清除授权使用的全零载荷。SN 身份解析按完整行读取 `factory`、`modelVersion` 和 `product`，因此 `product=PRO Audio` 不会再被旧工具 2.1.1 的正则表达式截断为 `PRO`。
+身份认证账号和密码默认均为空，并且仅保存在当前界面内存中，不写入 Webview 持久化状态。授权命令提供可编辑默认值；`{key}` 表示授权服务返回的数据，`{zeroKey}` 表示清除授权使用的全零载荷。SN 身份解析按完整行读取 `factory`、`modelVersion` 和 `product`，因此 `product=PRO Audio` 不会再被旧工具 2.1.1 的正则表达式截断为 `PRO`。
 
 身份认证服务地址和超时可通过以下 VS Code 设置调整：
 

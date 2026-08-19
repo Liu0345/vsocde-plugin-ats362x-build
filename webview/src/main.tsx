@@ -50,7 +50,7 @@ interface UsbDfuDevice {
   alt: number;
 }
 interface Notice { level: string; message: string; time: string }
-interface TransferProgress { action: 'usbDfu' | 'hidDfu' | 'flash' | ''; percent: number; detail: string }
+interface TransferProgress { action: 'usbDfu' | 'hidDfu' | 'flash' | 'erase' | ''; percent: number; detail: string }
 type IdentityTarget = 'algorithm' | 'sn' | 'system';
 type IdentityStatus = 'authorized' | 'unauthorized' | 'unknown' | 'running' | 'error';
 type IdentityAction = 'checkAlgorithm' | 'authorizeAlgorithm' | 'clearAlgorithm' | 'checkSn' | 'authorizeSn' | 'clearSn' | 'runCustom';
@@ -163,7 +163,7 @@ function App(): JSX.Element {
         />
       )}
       {page === 'identity' && <IdentityPage state={state} busy={identityBusy} events={identityEvents} results={identityResults} reservationResults={serialReservationResults} clearEvents={() => setIdentityEvents([])} />}
-      {page === 'tools' && <ToolsPage state={state} notices={notices} reservedSerialPorts={reservedSerialPorts} />}
+      {page === 'tools' && <ToolsPage state={state} notices={notices} reservedSerialPorts={reservedSerialPorts} progress={progress} />}
     </section>
   </main>;
 }
@@ -740,8 +740,8 @@ function CommandField({ label, value, set }: { label: string; value: string; set
   return <Field label={label}><input spellCheck={false} value={value} onChange={(event) => set(event.target.value)} /></Field>;
 }
 
-function ToolsPage({ state, notices, reservedSerialPorts }: { state: State; notices: Notice[]; reservedSerialPorts: string[] }): JSX.Element {
-  const [entry, setEntry] = useState('manual');
+function ToolsPage({ state, notices, reservedSerialPorts, progress }: { state: State; notices: Notice[]; reservedSerialPorts: string[]; progress: TransferProgress }): JSX.Element {
+  const [entry, setEntry] = useState('shell');
   const [size, setSize] = useState('8388608');
   const [timeout, setTimeoutValue] = useState('120');
   const [vidPid, setVidPid] = useState('10d6:10d6');
@@ -749,6 +749,8 @@ function ToolsPage({ state, notices, reservedSerialPorts }: { state: State; noti
   const [shellBaud, setShellBaud] = useState('3000000');
   const [shellCmd, setShellCmd] = useState('dbg reboot adfu');
   const [dryRun, setDryRun] = useState(false);
+  const busy = Boolean(state.busy);
+  const eraseProgress = progress.action === 'erase' ? progress : { action: '', percent: 0, detail: '' };
   return <>
     <Card title="工具状态" subtitle="插件调用现有 Baton / Actions Flash，并内置 HID 传输层">
       <div className="tool-grid">{state.tools.map((tool) => <div className="tool" key={tool.name}>
@@ -771,7 +773,8 @@ function ToolsPage({ state, notices, reservedSerialPorts }: { state: State; noti
       <div className="columns"><Field label="超时秒数"><input value={timeout} onChange={(e) => setTimeoutValue(e.target.value)} /></Field><Field label="ADFU VID:PID"><input value={vidPid} onChange={(e) => setVidPid(e.target.value)} /></Field></div>
       {entry === 'shell' && <><Field label="Shell UART"><SerialPortControl value={shellPort} set={setShellPort} ports={state.serialPorts} emptyLabel="使用设备配置" reserved={reservedSerialPorts.includes(shellPort)} /></Field><div className="columns"><Field label="Shell 波特率"><BaudSelect value={shellBaud} set={setShellBaud} /></Field><Field label="重启命令"><input value={shellCmd} onChange={(e) => setShellCmd(e.target.value)} /></Field></div></>}
       <Check label="仅预演，不擦除" checked={dryRun} set={setDryRun} />
-      <button className="danger" disabled={!state.projectPath} onClick={() => run('erase', { entry, size, timeout, vidPid, shellPort: entry === 'shell' ? shellPort : '', shellBaud: entry === 'shell' ? shellBaud : '', shellCmd: entry === 'shell' ? shellCmd : '', dryRun })}>{dryRun ? '预演全擦除' : '全擦除 Flash'}</button>
+      {(busy || eraseProgress.detail) && <TransferProgressBar progress={eraseProgress} />}
+      <button className="danger" disabled={!state.projectPath || busy} onClick={() => run('erase', { entry, size, timeout, vidPid, shellPort: entry === 'shell' ? shellPort : '', shellBaud: entry === 'shell' ? shellBaud : '', shellCmd: entry === 'shell' ? shellCmd : '', dryRun })}>{dryRun ? '预演全擦除' : '全擦除 Flash'}</button>
     </Card>
     <Card title="操作记录" subtitle="完整命令输出位于 ATS362X 集成终端">
       {notices.length === 0 ? <p className="muted">暂无操作</p> : <div className="logs">{notices.map((notice, index) => <div key={`${notice.time}-${index}`} className={notice.level}><time>{notice.time}</time><span>{notice.message}</span></div>)}</div>}

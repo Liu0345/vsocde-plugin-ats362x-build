@@ -8,7 +8,7 @@ export type FlashOutput = (text: string) => void;
 export class FlashRunner {
   private active?: ChildProcess;
 
-  public async run(cwd: string, command: BuiltCommand, onProgress?: FlashProgress, onOutput?: FlashOutput): Promise<void> {
+  public async run(cwd: string, command: BuiltCommand, onProgress?: FlashProgress, onOutput?: FlashOutput, operationLabel = '串口烧录'): Promise<void> {
     if (this.active) {
       throw new Error('已有串口烧录任务正在执行');
     }
@@ -36,7 +36,7 @@ export class FlashRunner {
         for (const percent of extractFlashPercentages(merged)) {
           if (percent > highestPercent) {
             highestPercent = percent;
-            onProgress?.(percent, percent < 100 ? '正在执行串口烧录' : '烧录完成');
+            onProgress?.(percent, percent < 100 ? `正在执行${operationLabel}` : `${operationLabel}已完成`);
           }
         }
       };
@@ -56,7 +56,7 @@ export class FlashRunner {
           return;
         }
         if (code === 0) {
-          onProgress?.(100, '烧录任务已完成');
+          onProgress?.(100, `${operationLabel}任务已完成`);
           resolve();
           return;
         }

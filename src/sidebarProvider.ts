@@ -341,8 +341,30 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
           this.flashOutput.appendLine(`${percent.toString().padStart(3, ' ')}% ${detail}`);
         }, (text) => {
           this.flashOutput.append(text);
-        });
+        }, '烧录');
         this.notice('info', `串口固件烧录命令已完成：${command.executable} ${command.args.join(' ')}`);
+      } finally {
+        this.state.busy = undefined;
+        this.post({ type: 'state', state: this.state });
+      }
+      return;
+    }
+
+    if (request.action === 'erase') {
+      this.state.busy = 'erase';
+      this.post({ type: 'state', state: this.state });
+      this.flashOutput.clear();
+      this.flashOutput.appendLine(`命令: ${command.executable} ${command.args.join(' ')}`);
+      this.flashOutput.show(true);
+      this.post({ type: 'progress', action: 'erase', percent: 0, detail: '准备执行全擦除' });
+      try {
+        await this.flashRunner.run(cwd, command, (percent, detail) => {
+          this.post({ type: 'progress', action: 'erase', percent, detail });
+          this.flashOutput.appendLine(`${percent.toString().padStart(3, ' ')}% ${detail}`);
+        }, (text) => {
+          this.flashOutput.append(text);
+        }, '全擦除');
+        this.notice('info', `全擦除命令已完成：${command.executable} ${command.args.join(' ')}`);
       } finally {
         this.state.busy = undefined;
         this.post({ type: 'state', state: this.state });

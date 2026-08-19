@@ -120,7 +120,7 @@ export type ExtensionToWebview =
   | { type: 'usbDfuFirmwareSelected'; path: string }
   | { type: 'serialReservations'; paths: string[] }
   | { type: 'serialReservationResult'; requestedPort: string; resolvedPort: string; reserved: boolean }
-  | { type: 'progress'; action: 'usbDfu' | 'hidDfu' | 'flash' | ''; percent: number; detail: string }
+  | { type: 'progress'; action: 'usbDfu' | 'hidDfu' | 'flash' | 'erase' | ''; percent: number; detail: string }
   | { type: 'identityBusy'; busy: boolean; action?: IdentityAction }
   | { type: 'identityEvent'; event: IdentityEvent }
   | { type: 'identityResult'; result: IdentityResult }

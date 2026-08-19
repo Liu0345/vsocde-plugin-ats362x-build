@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
 import { BuiltCommand } from './commandBuilder';
 import { shellQuote } from './shell';
+import * as path from 'node:path';
 
 export class TerminalRunner {
   private terminal?: vscode.Terminal;
+  private terminalCwd?: string;
 
   public async run(command: BuiltCommand, cwd: string): Promise<void> {
     if (command.destructive) {
@@ -25,10 +27,19 @@ export class TerminalRunner {
         : configuration.get<string>('dfuUtilPath', 'dfu-util');
     const line = [executable, ...command.args].map(shellQuote).join(' ');
 
-    if (!this.terminal || this.terminal.exitStatus !== undefined) {
+    const normalizeCwd = pathToPosix(cwd);
+    if (!this.terminal || this.terminal.exitStatus !== undefined || this.terminalCwd !== normalizeCwd) {
+      if (this.terminal && this.terminal.exitStatus === undefined) {
+        this.terminal.dispose();
+      }
       this.terminal = vscode.window.createTerminal({ name: 'ATS362X', cwd });
+      this.terminalCwd = normalizeCwd;
     }
     this.terminal.show(true);
     this.terminal.sendText(line, true);
   }
+}
+
+function pathToPosix(value: string): string {
+  return path.resolve(value).replace(/\\+/g, '/');
 }

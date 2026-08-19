@@ -21,8 +21,8 @@ test('授权登录按 OAuth2 表单提交账号和密码', () => {
 });
 
 test('授权账号和密码默认留空且不写入 Webview 持久化状态', () => {
-  assert.match(webviewSource, /const \[username, setUsername\] = useState\(''\)/);
-  assert.match(webviewSource, /const \[password, setPassword\] = useState\(''\)/);
+  assert.match(webviewSource, /const \[username, setUsername\] = useState\([^)]*username\)/);
+  assert.match(webviewSource, /const \[password, setPassword\] = useState\([^)]*password\)/);
   assert.doesNotMatch(webviewSource, /identity:\s*\{[^}]*username/);
 });
 

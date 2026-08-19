@@ -2,7 +2,7 @@
   "name": "vsocde-plugin-ats362x-build",
   "displayName": "ATS362X 构建与烧录",
   "description": "在 VS Code 中完成 ATS362X 项目编译、USB/HID DFU、固件烧录、校验、全擦除与设备身份认证。",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "publisher": "Liu0345",
   "license": "MIT",
   "repository": {

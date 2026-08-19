@@ -14,7 +14,7 @@ test('firmware discovery includes standard USB DFU files', async () => {
     await fs.writeFile(dfuFile, Buffer.from('DfuSe'));
     const result = await discoverFirmware(root);
     assert.equal(result.defaultDirectory, firmware);
-    assert.ok(result.files.includes(dfuFile));
+    assert.ok(result.files.some((entry) => entry.path === dfuFile));
     assert.equal(chooseFirmware(dfuFile, result.files, 'any'), dfuFile);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
@@ -35,7 +35,7 @@ test('固件扫描包含子目录中的全部文件且不按固定数量截断',
     }
     const result = await discoverFirmware(root);
     assert.equal(result.files.length, expected.length);
-    assert.deepEqual(new Set(result.files), new Set(expected));
+    assert.deepEqual(new Set(result.files.map((entry) => entry.path)), new Set(expected));
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

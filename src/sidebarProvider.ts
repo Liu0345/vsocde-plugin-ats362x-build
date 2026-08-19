@@ -3,10 +3,11 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { ExtensionToWebview, ProjectState, WebviewToExtension } from './types';
 import { buildCommand } from './services/commandBuilder';
-import { chooseFirmware, discoverFirmware } from './services/firmwareLocator';
+import { chooseFirmware, discoverFirmware, FirmwareEntry } from './services/firmwareLocator';
 import { HidDfuService } from './services/hidDfu';
 import { ProjectStore, isAriaWorkspace } from './services/projectStore';
 import { TerminalRunner } from './services/terminalRunner';
+import { FlashRunner } from './services/flashRunner';
 import { inspectTools } from './services/tooling';
 import { checkSerialPortAvailability, listSerialPorts, SerialPortReservation } from './services/serialPorts';
 import { listUsbDfuDevices, UsbDfuService } from './services/usbDfu';
@@ -22,11 +23,13 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
   });
   private state: ProjectState = { recentProjects: [], discoveredFirmware: [], serialPorts: [], tools: [], buildOptions: [] };
   private readonly terminal = new TerminalRunner();
+  private readonly flashRunner = new FlashRunner();
   private readonly hid = new HidDfuService();
   private readonly usbDfu = new UsbDfuService();
   private readonly identity: IdentityAuthorizationService;
   private readonly serialReservation = new SerialPortReservation();
   private readonly usbDfuOutput = vscode.window.createOutputChannel('ATS362X USB DFU');
+  private readonly flashOutput = vscode.window.createOutputChannel('ATS362X 串口烧录');
 
   public constructor(
     private readonly context: vscode.ExtensionContext,
@@ -40,6 +43,7 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
       httpTimeoutMs: configuration.get<number>('identityHttpTimeoutMs')
     });
     this.context.subscriptions.push(this.usbDfuOutput);
+    this.context.subscriptions.push(this.flashOutput);
     this.context.subscriptions.push({ dispose: () => void this.serialReservation.release() });
   }
 
@@ -58,7 +62,7 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
     if (this.panel) {
       const existing = this.panel;
       try {
-        existing.reveal(vscode.ViewColumn.One);
+        existing.reveal(vscode.ViewColumn.Active);
         this.post({ type: 'state', state: this.state });
         return;
       } catch (error) {
@@ -70,7 +74,7 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
     const panel = vscode.window.createWebviewPanel(
       'ats362xBuild.console',
       'ATS362X 构建与烧录',
-      vscode.ViewColumn.One,
+      vscode.ViewColumn.Active,
       { enableScripts: true, retainContextWhenHidden: true }
     );
     this.configureWebview(panel.webview);
@@ -109,28 +113,41 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
     const projectPath = this.projects.selectedProject;
     const discovery = await discoverFirmware(projectPath);
     const override = this.projects.firmwareOverride;
-    let overrideFiles: string[] = [];
+    let overrideEntries: FirmwareEntry[] = [];
     if (override) {
       try {
         const stat = await fs.stat(override);
         if (stat.isDirectory()) {
-          const entries = await fs.readdir(override, { withFileTypes: true });
-          overrideFiles = entries
+          const files = (await fs.readdir(override, { withFileTypes: true }))
             .filter((entry) => entry.isFile() && ['.bin', '.dfu', '.fw', '.img', '.hex'].includes(path.extname(entry.name).toLowerCase()))
             .map((entry) => path.join(override, entry.name));
+          overrideEntries = await this.collectFirmwareEntries(files);
         } else {
-          overrideFiles = [override];
+          const statInfo = await fs.stat(override);
+          if (statInfo.isFile()) {
+            overrideEntries = [{ path: override, modified: statInfo.mtimeMs }];
+          }
         }
       } catch {
         // 保留无效覆盖路径供界面显示，实际执行时会给出明确错误。
       }
     }
+    const normalizedByPath = new Set<string>(overrideEntries.map((entry) => path.resolve(entry.path)));
+    const discoveredFirmware = [
+      ...overrideEntries,
+      ...discovery.files.filter((entry) => {
+        const candidate = path.resolve(entry.path);
+        if (normalizedByPath.has(candidate)) return false;
+        normalizedByPath.add(candidate);
+        return true;
+      })
+    ];
     this.state = {
       projectPath,
       recentProjects: this.projects.recentProjects,
       firmwareOverride: override,
       defaultFirmwareDirectory: discovery.defaultDirectory,
-      discoveredFirmware: [...overrideFiles, ...discovery.files.filter((file) => !overrideFiles.includes(file))],
+      discoveredFirmware,
       serialPorts: await listSerialPorts(),
       tools: await inspectTools(),
       buildOptions: await discoverBuildOptions(projectPath),
@@ -310,6 +327,29 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
     }
     const firmware = chooseFirmware(explicitFirmware, this.state.discoveredFirmware, preference);
     const command = buildCommand(request, firmware);
+
+    if (request.action === 'flash') {
+      this.state.busy = 'flash';
+      this.post({ type: 'state', state: this.state });
+      this.flashOutput.clear();
+      this.flashOutput.appendLine(`命令: ${command.executable} ${command.args.join(' ')}`);
+      this.flashOutput.show(true);
+      this.post({ type: 'progress', action: 'flash', percent: 0, detail: '准备执行串口烧录' });
+      try {
+        await this.flashRunner.run(cwd, command, (percent, detail) => {
+          this.post({ type: 'progress', action: 'flash', percent, detail });
+          this.flashOutput.appendLine(`${percent.toString().padStart(3, ' ')}% ${detail}`);
+        }, (text) => {
+          this.flashOutput.append(text);
+        });
+        this.notice('info', `串口固件烧录命令已完成：${command.executable} ${command.args.join(' ')}`);
+      } finally {
+        this.state.busy = undefined;
+        this.post({ type: 'state', state: this.state });
+      }
+      return;
+    }
+
     await this.terminal.run(command, cwd);
     this.notice('info', `已在终端运行：${command.executable} ${command.args.join(' ')}`);
   }
@@ -497,6 +537,21 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
 
   private post(message: ExtensionToWebview): void {
     this.webviews.post(message);
+  }
+
+  private async collectFirmwareEntries(files: string[]): Promise<FirmwareEntry[]> {
+    const entries: FirmwareEntry[] = [];
+    for (const file of files) {
+      try {
+        const stat = await fs.stat(file);
+        if (stat.isFile()) {
+          entries.push({ path: file, modified: stat.mtimeMs });
+        }
+      } catch {
+        // 发现路径无效时静默跳过，实际扫描后端会返回更明确状态。
+      }
+    }
+    return entries;
   }
 
   private notice(level: 'info' | 'warning' | 'error', message: string): void {

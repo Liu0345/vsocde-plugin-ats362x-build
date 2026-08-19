@@ -3,9 +3,14 @@ import * as path from 'node:path';
 
 const FIRMWARE_SUFFIXES = ['.fw', '.bin', '.dfu', '.img', '.hex'];
 
+export interface FirmwareEntry {
+  path: string;
+  modified: number;
+}
+
 export interface FirmwareDiscovery {
   defaultDirectory?: string;
-  files: string[];
+  files: FirmwareEntry[];
 }
 
 export async function discoverFirmware(projectPath?: string): Promise<FirmwareDiscovery> {
@@ -26,8 +31,13 @@ export async function discoverFirmware(projectPath?: string): Promise<FirmwareDi
 
   return {
     defaultDirectory: ranked[0]?.directory,
-    files: ranked.flatMap((item) => item.files)
-      .sort((left, right) => scoreFirmware(right) - scoreFirmware(left))
+    files: ranked
+      .flatMap((item) => item.files.map((file) => ({ path: file, modified: item.modified })))
+      .sort((left, right) => {
+        const score = scoreFirmware(right.path) - scoreFirmware(left.path);
+        if (score !== 0) return score;
+        return right.modified - left.modified;
+      })
   };
 }
 
@@ -99,17 +109,17 @@ function scoreFirmware(file: string): number {
 
 export function chooseFirmware(
   override: string | undefined,
-  discovered: string[],
+  discovered: FirmwareEntry[],
   preference: 'ota' | 'fw' | 'any'
 ): string | undefined {
   if (override) {
     return override;
   }
-  const match = discovered.find((file) => {
-    const name = path.basename(file).toLowerCase();
+  const match = discovered.find((entry) => {
+    const name = path.basename(entry.path).toLowerCase();
     if (preference === 'ota') return name.includes('ota') && name.endsWith('.bin');
     if (preference === 'fw') return name.endsWith('.fw');
     return true;
   });
-  return match ?? discovered[0];
+  return match ? match.path : discovered[0]?.path;
 }

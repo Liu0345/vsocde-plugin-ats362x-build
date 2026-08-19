@@ -9,17 +9,19 @@ interface VsCodeApi {
 }
 declare function acquireVsCodeApi(): VsCodeApi;
 const vscode = acquireVsCodeApi();
+const identityCredentialSession: { username: string; password: string } = { username: '', password: '' };
 
 type Page = 'project' | 'build' | 'dfu' | 'identity' | 'tools';
 interface Tool { name: string; label: string; available: boolean; detail: string }
 interface BuildOptionInfo { app: string; boards: string[] }
 interface EditableChoiceOption { value: string; label?: string }
+interface FirmwareChoice { path: string; modified: number }
 interface State {
   projectPath?: string;
   recentProjects: string[];
   firmwareOverride?: string;
   defaultFirmwareDirectory?: string;
-  discoveredFirmware: string[];
+  discoveredFirmware: FirmwareChoice[];
   serialPorts: SerialPortInfo[];
   tools: Tool[];
   buildOptions: BuildOptionInfo[];
@@ -48,7 +50,7 @@ interface UsbDfuDevice {
   alt: number;
 }
 interface Notice { level: string; message: string; time: string }
-interface TransferProgress { action: 'usbDfu' | 'hidDfu' | ''; percent: number; detail: string }
+interface TransferProgress { action: 'usbDfu' | 'hidDfu' | 'flash' | ''; percent: number; detail: string }
 type IdentityTarget = 'algorithm' | 'sn' | 'system';
 type IdentityStatus = 'authorized' | 'unauthorized' | 'unknown' | 'running' | 'error';
 type IdentityAction = 'checkAlgorithm' | 'authorizeAlgorithm' | 'clearAlgorithm' | 'checkSn' | 'authorizeSn' | 'clearSn' | 'runCustom';
@@ -81,6 +83,8 @@ function App(): JSX.Element {
   const [state, setState] = useState<State>(initialState);
   const [hidDevices, setHidDevices] = useState<HidDevice[]>([]);
   const [usbDfuDevices, setUsbDfuDevices] = useState<UsbDfuDevice[]>([]);
+  const [usbDfuDeviceKey, setUsbDfuDeviceKey] = useState('');
+  const [hidDevicePath, setHidDevicePath] = useState('');
   const [usbDfuFirmware, setUsbDfuFirmware] = useState('');
   const [reservedSerialPorts, setReservedSerialPorts] = useState<string[]>([]);
   const [serialReservationResults, setSerialReservationResults] = useState<Record<string, boolean>>({});
@@ -94,8 +98,24 @@ function App(): JSX.Element {
     const listener = (event: MessageEvent) => {
       const message = event.data;
       if (message.type === 'state') setState(message.state);
-      if (message.type === 'hidDevices') setHidDevices(message.devices);
-      if (message.type === 'usbDfuDevices') setUsbDfuDevices(message.devices);
+      if (message.type === 'hidDevices') {
+        const devices = message.devices;
+        setHidDevices(devices);
+        setHidDevicePath((current) => {
+          if (!Array.isArray(devices) || devices.length === 0) return '';
+          if (current && devices.some((item: HidDevice) => item.path === current)) return current;
+          return devices[0].path;
+        });
+      }
+      if (message.type === 'usbDfuDevices') {
+        const devices = message.devices;
+        setUsbDfuDevices(devices);
+        setUsbDfuDeviceKey((current) => {
+          if (!Array.isArray(devices) || devices.length === 0) return '';
+          if (current && devices.some((item: UsbDfuDevice) => item.key === current)) return current;
+          return devices[0].key;
+        });
+      }
       if (message.type === 'usbDfuFirmwareSelected') setUsbDfuFirmware(message.path);
       if (message.type === 'serialReservations') setReservedSerialPorts(message.paths);
       if (message.type === 'serialReservationResult') {
@@ -126,10 +146,22 @@ function App(): JSX.Element {
     <section className="content">
       {page === 'project' && <ProjectPage state={state} />}
       {page === 'build' && <div className="build-flash-grid">
-        <BuildPage state={state} disabled={!state.projectPath} />
-        <FlashPage state={state} reservedSerialPorts={reservedSerialPorts} />
+        <BuildPage state={state} disabled={!state.projectPath} projectPath={state.projectPath} />
+        <FlashPage state={state} reservedSerialPorts={reservedSerialPorts} progress={progress} />
       </div>}
-      {page === 'dfu' && <DfuPage state={state} usbDevices={usbDfuDevices} hidDevices={hidDevices} usbFirmware={usbDfuFirmware} progress={progress} />}
+      {page === 'dfu' && (
+        <DfuPage
+          state={state}
+          usbDevices={usbDfuDevices}
+          hidDevices={hidDevices}
+          usbFirmware={usbDfuFirmware}
+          progress={progress}
+          usbDeviceKey={usbDfuDeviceKey}
+          onUsbDeviceKeyChange={setUsbDfuDeviceKey}
+          hidDevicePath={hidDevicePath}
+          onHidDevicePathChange={setHidDevicePath}
+        />
+      )}
       {page === 'identity' && <IdentityPage state={state} busy={identityBusy} events={identityEvents} results={identityResults} reservationResults={serialReservationResults} clearEvents={() => setIdentityEvents([])} />}
       {page === 'tools' && <ToolsPage state={state} notices={notices} reservedSerialPorts={reservedSerialPorts} />}
     </section>
@@ -179,12 +211,12 @@ function FirmwareCard({ state }: { state: State }): JSX.Element {
       {state.firmwareOverride && <button className="ghost" onClick={() => vscode.postMessage({ type: 'clearFirmwareOverride' })}>恢复默认</button>}
     </div>
     {state.discoveredFirmware.length > 0 && <details><summary>已发现 {state.discoveredFirmware.length} 个固件</summary>
-      <div className="file-list">{state.discoveredFirmware.map((file) => <code key={file} title={file}>{basename(file)}</code>)}</div>
+      <div className="file-list">{state.discoveredFirmware.map((file) => <code key={file.path} title={file.path}>{formatFirmwareOption(file)}</code>)}</div>
     </details>}
   </Card>;
 }
 
-function BuildPage({ state, disabled }: { state: State; disabled: boolean }): JSX.Element {
+function BuildPage({ state, disabled, projectPath }: { state: State; disabled: boolean; projectPath?: string }): JSX.Element {
   const [host, setHost] = useState('builder-ubuntu');
   const [download, setDownload] = useState('ota-fw');
   const [board, setBoard] = useState('');
@@ -197,6 +229,25 @@ function BuildPage({ state, disabled }: { state: State; disabled: boolean }): JS
   const boards = [...new Set(
     (state.buildOptions.find((item) => item.app === app)?.boards ?? state.buildOptions.flatMap((item) => item.boards))
   )].sort((left, right) => left.localeCompare(right, 'en'));
+  useEffect(() => {
+    if (!projectPath) {
+      setApp('');
+      setBoard('');
+      return;
+    }
+    if (app && !apps.includes(app)) {
+      setApp('');
+    }
+  }, [app, apps, projectPath]);
+  useEffect(() => {
+    if (!app) {
+      setBoard('');
+      return;
+    }
+    if (board && !boards.includes(board)) {
+      setBoard('');
+    }
+  }, [app, board, boards]);
   const options = { buildHost: host, download, board, app, dspOnly, skipDsp, keep, mapSummary };
   return <Card title="固件编译" subtitle="默认在 builder-ubuntu 远程构建，避免本机 QEMU 慢编译">
     <Field label="构建主机"><input value={host} onChange={(e) => setHost(e.target.value)} placeholder="builder-ubuntu" /></Field>
@@ -231,7 +282,15 @@ function EditableBuildOption({ label, listId, value, set, options, placeholder }
   </Field>;
 }
 
-function FlashPage({ state, reservedSerialPorts }: { state: State; reservedSerialPorts: string[] }): JSX.Element {
+function FlashPage({
+  state,
+  reservedSerialPorts,
+  progress
+}: {
+  state: State;
+  reservedSerialPorts: string[];
+  progress: TransferProgress;
+}): JSX.Element {
   const [method, setMethod] = useState('ota-uart');
   const [entry, setEntry] = useState('power-cycle');
   const [verify, setVerify] = useState('boot');
@@ -242,14 +301,23 @@ function FlashPage({ state, reservedSerialPorts }: { state: State; reservedSeria
   const [dryRun, setDryRun] = useState(false);
   const [selectedFirmware, setSelectedFirmware] = useState('');
   const firmware = state.firmwareOverride ?? state.defaultFirmwareDirectory;
+  const firmwareCandidates = useMemo(
+    () => state.discoveredFirmware.filter((file) => /\.(bin|dfu|fw|img|hex)$/i.test(file.path)),
+    [state.discoveredFirmware]
+  );
   useFirmwareOverride(state.firmwareOverride, state.discoveredFirmware, setSelectedFirmware);
   useEffect(() => {
-    if (selectedFirmware && !state.discoveredFirmware.includes(selectedFirmware)) {
+    if (selectedFirmware && !state.discoveredFirmware.some((file) => file.path === selectedFirmware)) {
       setSelectedFirmware('');
     }
-  }, [state.discoveredFirmware, selectedFirmware]);
+    if (!selectedFirmware && firmwareCandidates.length > 0) {
+      setSelectedFirmware(firmwareCandidates[0].path);
+    }
+  }, [state.discoveredFirmware, selectedFirmware, firmwareCandidates]);
+  const busy = state.busy === 'flash';
+  const flashProgress = progress.action === 'flash' ? progress : { action: '', percent: 0, detail: '' };
   return <Card title="串口固件烧录">
-      <Field label="烧录固件"><div className="input-action"><PlaceholderSelect value={selectedFirmware} onChange={(event) => setSelectedFirmware(event.target.value)}><option value="">空白-选项</option>{state.discoveredFirmware.map((file) => <option key={file} value={file} title={file}>{tailName(file)}</option>)}</PlaceholderSelect><div className="inline-actions"><button className="secondary" onClick={() => vscode.postMessage({ type: 'scanFirmware' })}>扫描</button><button className="secondary" onClick={() => vscode.postMessage({ type: 'selectFirmware' })}>选择固件</button></div></div></Field>
+      <Field label="烧录固件"><div className="input-action"><PlaceholderSelect value={selectedFirmware} onChange={(event) => setSelectedFirmware(event.target.value)}><option value="">空白-选项</option>{state.discoveredFirmware.map((file) => <option key={file.path} value={file.path} title={file.path}>{formatFirmwareOption(file)}</option>)}</PlaceholderSelect><div className="inline-actions"><button className="secondary" onClick={() => vscode.postMessage({ type: 'scanFirmware' })}>扫描</button><button className="secondary" onClick={() => vscode.postMessage({ type: 'selectFirmware' })}>选择固件</button></div></div></Field>
       <Field label="烧录方式"><select value={method} onChange={(e) => setMethod(e.target.value)}>
         <option value="ota-uart">UART OTA (.bin)</option><option value="fw-uart">UART ADFU (.fw)</option>
       </select></Field>
@@ -257,29 +325,46 @@ function FlashPage({ state, reservedSerialPorts }: { state: State; reservedSeria
       <div className="columns flash-serial-fields"><Field label="UART 串口"><SerialPortControl value={uart} set={setUart} ports={state.serialPorts} reserved={reservedSerialPorts.includes(uart)} /></Field><Field label="波特率"><BaudSelect value={baud} set={setBaud} /></Field></div>
       <div className="columns"><Field label="超时秒数"><input value={timeout} onChange={(e) => setTimeoutValue(e.target.value)} /></Field><Field label="ADFU VID:PID"><input value={vidPid} onChange={(e) => setVidPid(e.target.value)} /></Field></div>
       <Check label="仅预演，不写设备" checked={dryRun} set={setDryRun} />
-      <button disabled={!state.projectPath || !selectedFirmware} onClick={() => run('flash', { firmware: selectedFirmware, method, entry, verify, uart, baud, timeout, vidPid, dryRun })}>开始烧录</button>
+      {(busy || flashProgress.detail) && <TransferProgressBar progress={flashProgress} />}
+      <button disabled={busy || !state.projectPath || !selectedFirmware} onClick={() => run('flash', { firmware: selectedFirmware, method, entry, verify, uart, baud, timeout, vidPid, dryRun })}>开始烧录</button>
       <div className="flash-firmware-source"><PathValue label="当前固件来源" value={firmware} empty="未发现固件" /></div>
   </Card>;
 }
 
-function UsbDfuPage({ state, devices, hidDevices, selectedFirmware, progress }: { state: State; devices: UsbDfuDevice[]; hidDevices: HidDevice[]; selectedFirmware: string; progress: TransferProgress }): JSX.Element {
+function UsbDfuPage({ state, devices, hidDevices, selectedFirmware, selectedDeviceKey, onDeviceKeyChange, progress }: { state: State; devices: UsbDfuDevice[]; hidDevices: HidDevice[]; selectedFirmware: string; selectedDeviceKey: string; onDeviceKeyChange: (value: string) => void; progress: TransferProgress }): JSX.Element {
   const candidates = useMemo(
-    () => [...new Set([selectedFirmware, ...state.discoveredFirmware].filter((file) => file && /\.(bin|dfu)$/i.test(file)))],
+    () => {
+      const firmwareFiles = state.discoveredFirmware
+        .map((file) => file.path)
+        .filter((file) => /\.(bin|dfu)$/i.test(file));
+      const values = [selectedFirmware, ...firmwareFiles].filter((file) => file && /\.(bin|dfu)$/i.test(file));
+      return [...new Set(values)];
+    },
     [selectedFirmware, state.discoveredFirmware]
   );
   const [firmware, setFirmware] = useState('');
-  const [deviceKey, setDeviceKey] = useState('');
   const [reset, setReset] = useState(false);
   useEffect(() => {
     if (selectedFirmware) setFirmware(selectedFirmware);
   }, [selectedFirmware]);
   useEffect(() => {
-    if (firmware && !candidates.includes(firmware)) setFirmware('');
+    if (firmware && !candidates.includes(firmware)) {
+      setFirmware('');
+    }
+    if (!firmware && candidates.length > 0) {
+      setFirmware(candidates[0]);
+    }
   }, [candidates, firmware]);
   useEffect(() => {
-    if (deviceKey && !devices.some((device) => device.key === deviceKey)) setDeviceKey('');
-  }, [deviceKey, devices]);
-  const device = devices.find((item) => item.key === deviceKey);
+    if (!Array.isArray(devices) || devices.length === 0) {
+      onDeviceKeyChange('');
+      return;
+    }
+    if (!selectedDeviceKey || !devices.some((item) => item.key === selectedDeviceKey)) {
+      onDeviceKeyChange(devices[0].key);
+    }
+  }, [devices, selectedDeviceKey, onDeviceKeyChange]);
+  const device = devices.find((item) => item.key === selectedDeviceKey);
   const hidDevice = device ? findCompanionDevice(device, hidDevices) : undefined;
   const deviceLabel = device ? usbDfuDeviceLabel(device, hidDevice) : undefined;
   const busy = state.busy === 'usbDfu';
@@ -301,49 +386,85 @@ function UsbDfuPage({ state, devices, hidDevices, selectedFirmware, progress }: 
   >
     <div className="callout">只显示同时枚举 USB Audio Class 与标准 DFU Runtime 接口的设备；传输时按 VID:PID 和 USB 物理路径锁定所选设备。单独选择的固件仅供本页面使用，不会改变其他功能的固件来源。</div>
     <div className="button-row"><button className="secondary" disabled={busy} onClick={scanDfuDevices}>扫描 UAC 设备</button><span className="muted">发现 {devices.length} 个可用设备</span></div>
-    <Field label="UAC 设备"><PlaceholderSelect disabled={busy} value={deviceKey} selectedLabel={deviceLabel} preferTail={false} onChange={(event) => setDeviceKey(event.target.value)}><option value="">空白-选项</option>{devices.map((item) => {
+    <Field label="UAC 设备"><PlaceholderSelect disabled={busy} value={selectedDeviceKey} selectedLabel={deviceLabel} preferTail={false} onChange={(event) => onDeviceKeyChange(event.target.value)}><option value="">空白-选项</option>{devices.map((item) => {
       const companion = findCompanionDevice(item, hidDevices);
       return <option key={item.key} value={item.key}>{usbDfuDeviceLabel(item, companion)}</option>;
     })}</PlaceholderSelect></Field>
     {device && <div className="device-meta"><code>USB 路径 {device.usbPath}</code></div>}
-    <Field label="DFU 固件"><div className="input-action"><PlaceholderSelect disabled={busy} value={firmware} onChange={(event) => setFirmware(event.target.value)}><option value="">空白-选项</option>{candidates.map((file) => <option key={file} value={file} title={file}>{tailName(file)}</option>)}</PlaceholderSelect><div className="inline-actions"><button className="secondary" disabled={busy} onClick={() => vscode.postMessage({ type: 'scanFirmware' })}>扫描</button><button className="secondary" disabled={busy} onClick={() => vscode.postMessage({ type: 'selectUsbDfuFirmware' })}>选择固件</button></div></div></Field>
+    <Field label="DFU 固件"><div className="input-action"><PlaceholderSelect disabled={busy} value={firmware} onChange={(event) => setFirmware(event.target.value)}><option value="">空白-选项</option>{state.discoveredFirmware.filter((file) => /\.(bin|dfu)$/i.test(file.path)).map((file) => <option key={file.path} value={file.path} title={file.path}>{formatFirmwareOption(file)}</option>)}</PlaceholderSelect><div className="inline-actions"><button className="secondary" disabled={busy} onClick={() => vscode.postMessage({ type: 'scanFirmware' })}>扫描</button><button className="secondary" disabled={busy} onClick={() => vscode.postMessage({ type: 'selectUsbDfuFirmware' })}>选择固件</button></div></div></Field>
     <Check label="传输完成后请求 USB 复位" checked={reset} set={setReset} />
     {(busy || usbProgress.detail) && <TransferProgressBar progress={usbProgress} />}
     <div className="button-row"><button disabled={busy || !device || !hasFirmware} onClick={() => device && vscode.postMessage({ type: 'usbDfu', device, firmware, reset })}>开始 USB DFU</button>{busy && <button className="danger" onClick={() => vscode.postMessage({ type: 'usbDfuAbort' })}>取消</button>}</div>
   </Card>;
 }
 
-function DfuPage({ state, usbDevices, hidDevices, usbFirmware, progress }: {
+function DfuPage({ state, usbDevices, hidDevices, usbFirmware, progress, usbDeviceKey, onUsbDeviceKeyChange, hidDevicePath, onHidDevicePathChange }: {
   state: State;
   usbDevices: UsbDfuDevice[];
   hidDevices: HidDevice[];
   usbFirmware: string;
   progress: TransferProgress;
+  usbDeviceKey: string;
+  onUsbDeviceKeyChange: (value: string) => void;
+  hidDevicePath: string;
+  onHidDevicePathChange: (value: string) => void;
 }): JSX.Element {
   return <div className="dfu-stack">
-    <UsbDfuPage state={state} devices={usbDevices} hidDevices={hidDevices} selectedFirmware={usbFirmware} progress={progress} />
-    <HidPage state={state} devices={hidDevices} usbDevices={usbDevices} progress={progress} />
+    <UsbDfuPage
+      state={state}
+      devices={usbDevices}
+      hidDevices={hidDevices}
+      selectedFirmware={usbFirmware}
+      selectedDeviceKey={usbDeviceKey}
+      onDeviceKeyChange={onUsbDeviceKeyChange}
+      progress={progress}
+    />
+    <HidPage
+      state={state}
+      devices={hidDevices}
+      usbDevices={usbDevices}
+      selectedDevicePath={hidDevicePath}
+      onDevicePathChange={onHidDevicePathChange}
+      progress={progress}
+    />
   </div>;
 }
 
-function HidPage({ state, devices, usbDevices, progress }: { state: State; devices: HidDevice[]; usbDevices: UsbDfuDevice[]; progress: TransferProgress }): JSX.Element {
-  const [devicePath, setDevicePath] = useState('');
+function HidPage({ state, devices, usbDevices, progress, selectedDevicePath, onDevicePathChange }: { state: State; devices: HidDevice[]; usbDevices: UsbDfuDevice[]; progress: TransferProgress; selectedDevicePath: string; onDevicePathChange: (value: string) => void }): JSX.Element {
   const [firmware, setFirmware] = useState('');
+  const firmwareCandidates = useMemo(
+    () => state.discoveredFirmware.filter((file) => /\.bin$/i.test(file.path)),
+    [state.discoveredFirmware]
+  );
   useEffect(() => {
-    if (devicePath && !devices.some((device) => device.path === devicePath)) setDevicePath('');
-  }, [devices, devicePath]);
+    if (!Array.isArray(devices) || devices.length === 0) {
+      onDevicePathChange('');
+      return;
+    }
+    if (!selectedDevicePath || !devices.some((device) => device.path === selectedDevicePath)) {
+      onDevicePathChange(devices[0].path);
+    }
+  }, [devices, selectedDevicePath, onDevicePathChange]);
   useFirmwareOverride(
     state.firmwareOverride && /\.bin$/i.test(state.firmwareOverride) ? state.firmwareOverride : undefined,
     state.discoveredFirmware,
     setFirmware
   );
-  const device = devices.find((item) => item.path === devicePath);
+  const device = devices.find((item) => item.path === selectedDevicePath);
   const usbDevice = device ? findCompanionDevice(device, usbDevices) : undefined;
   const deviceLabel = device ? hidDfuDeviceLabel(device, usbDevice) : undefined;
   const busy = state.busy === 'hidDfu';
   const hidProgress = progress.action === 'hidDfu' ? progress : { action: '', percent: 0, detail: '' };
+  useEffect(() => {
+    if (firmware && !firmwareCandidates.some((file) => file.path === firmware)) {
+      setFirmware('');
+    }
+    if (!firmware && firmwareCandidates.length > 0) {
+      setFirmware(firmwareCandidates[0].path);
+    }
+  }, [firmware, firmwareCandidates]);
   return <Card
-    title="HID 运行时 DFU"
+    title="HID DFU"
     subtitle="通过 DSPTuner v2 HID 协议传输 OTA .bin；每帧 CRC16，整包 CRC32"
     headerAside={device && <DeviceSummary
       manufacturer={device.manufacturer ?? usbDevice?.manufacturer}
@@ -357,13 +478,13 @@ function HidPage({ state, devices, usbDevices, progress }: { state: State; devic
   >
     <div className="callout">HID DFU 不进入 ADFU 模式。设备必须已枚举普通 HID 接口，固件上需启用 HID 更新模块。</div>
     <div className="button-row"><button className="secondary" disabled={busy} onClick={scanDfuDevices}>扫描 UAC HID</button><span className="muted">发现 {devices.length} 个 UAC 厂商 HID 接口</span></div>
-    <Field label="HID 设备"><PlaceholderSelect disabled={busy} value={devicePath} selectedLabel={deviceLabel} preferTail={false} onChange={(e) => setDevicePath(e.target.value)}><option value="">空白-选项</option>{devices.map((item) => {
+    <Field label="HID 设备"><PlaceholderSelect disabled={busy} value={selectedDevicePath} selectedLabel={deviceLabel} preferTail={false} onChange={(e) => onDevicePathChange(e.target.value)}><option value="">空白-选项</option>{devices.map((item) => {
       const companion = findCompanionDevice(item, usbDevices);
       return <option key={item.path} value={item.path}>{hidDfuDeviceLabel(item, companion)}</option>;
     })}</PlaceholderSelect></Field>
-    <Field label="OTA .bin 固件"><div className="input-action"><PlaceholderSelect value={firmware} onChange={(e) => setFirmware(e.target.value)}><option value="">空白-选项</option>{state.discoveredFirmware.filter((file) => /\.bin$/i.test(file)).map((file) => <option key={file} value={file} title={file}>{tailName(file)}</option>)}</PlaceholderSelect><div className="inline-actions"><button className="secondary" disabled={busy} onClick={() => vscode.postMessage({ type: 'scanFirmware' })}>扫描</button><button className="secondary" disabled={busy} onClick={() => vscode.postMessage({ type: 'selectHidFirmware' })}>选择固件</button></div></div></Field>
+    <Field label="OTA .bin 固件"><div className="input-action"><PlaceholderSelect value={firmware} onChange={(e) => setFirmware(e.target.value)}><option value="">空白-选项</option>{firmwareCandidates.map((file) => <option key={file.path} value={file.path} title={file.path}>{formatFirmwareOption(file)}</option>)}</PlaceholderSelect><div className="inline-actions"><button className="secondary" disabled={busy} onClick={() => vscode.postMessage({ type: 'scanFirmware' })}>扫描</button><button className="secondary" disabled={busy} onClick={() => vscode.postMessage({ type: 'selectHidFirmware' })}>选择固件</button></div></div></Field>
     {(busy || hidProgress.detail) && <TransferProgressBar progress={hidProgress} />}
-    <div className="button-row"><button disabled={busy || !devicePath || !firmware} onClick={() => vscode.postMessage({ type: 'hidDfu', path: devicePath, firmware, expectedBcd: 0 })}>开始 HID DFU</button>{busy && <button className="danger" onClick={() => vscode.postMessage({ type: 'hidAbort', path: devicePath })}>取消</button>}</div>
+    <div className="button-row"><button disabled={busy || !selectedDevicePath || !firmware} onClick={() => vscode.postMessage({ type: 'hidDfu', path: selectedDevicePath, firmware, expectedBcd: 0 })}>开始 HID DFU</button>{busy && <button className="danger" onClick={() => vscode.postMessage({ type: 'hidAbort', path: selectedDevicePath })}>取消</button>}</div>
   </Card>;
 }
 
@@ -405,8 +526,8 @@ function IdentityPage({
   const persisted = (vscode.getState()?.identity ?? {}) as SavedIdentitySettings;
   const [port, setPort] = useState(persisted.port ?? '');
   const [baudRate, setBaudRate] = useState(persisted.baudRate ?? '3000000');
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+  const [username, setUsername] = useState(identityCredentialSession.username);
+  const [password, setPassword] = useState(identityCredentialSession.password);
   const [showPassword, setShowPassword] = useState(false);
   const [rebootAfterWrite, setRebootAfterWrite] = useState(persisted.rebootAfterWrite ?? true);
   const [keepPortReserved, setKeepPortReserved] = useState(false);
@@ -420,6 +541,11 @@ function IdentityPage({
       identity: { port, baudRate, commands, customCommand, rebootAfterWrite }
     });
   }, [port, baudRate, commands, customCommand, rebootAfterWrite]);
+
+  useEffect(() => {
+    identityCredentialSession.username = username;
+    identityCredentialSession.password = password;
+  }, [username, password]);
 
   useEffect(() => {
     if (reservationResults[port] !== undefined) setKeepPortReserved(reservationResults[port]);
@@ -777,13 +903,28 @@ function selectedOptionLabel(children: React.ReactNode, value: string): string {
 function Field({ label, children }: React.PropsWithChildren<{ label: string }>): JSX.Element { return <label className="field"><span>{label}</span>{children}</label>; }
 function Check({ label, checked, set, disabled = false }: { label: string; checked: boolean; set: (value: boolean) => void; disabled?: boolean }): JSX.Element { return <label className={`check ${disabled ? 'disabled' : ''}`}><input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => set(e.target.checked)} /><span>{label}</span></label>; }
 function TransferProgressBar({ progress }: { progress: Pick<TransferProgress, 'percent' | 'detail'> }): JSX.Element { return <div className="progress"><div><span style={{ width: `${progress.percent}%` }} /></div><small>{progress.percent}% · {progress.detail || '等待传输进度'}</small></div>; }
-function useFirmwareOverride(override: string | undefined, candidates: string[], setSelected: (value: string) => void): void {
+function useFirmwareOverride(override: string | undefined, candidates: FirmwareChoice[], setSelected: (value: string) => void): void {
   const lastApplied = useRef<string | undefined>();
   useEffect(() => {
     if (override === lastApplied.current) return;
     lastApplied.current = override;
-    if (override && candidates.includes(override)) setSelected(override);
+    if (override && candidates.some((candidate) => candidate.path === override)) setSelected(override);
   }, [override, candidates, setSelected]);
+}
+function formatFirmwareOption(file: FirmwareChoice): string {
+  const timestamp = formatFirmwareTime(file.modified);
+  return timestamp ? `${tailName(file.path)} (${timestamp})` : tailName(file.path);
+}
+function formatFirmwareTime(modified: number): string {
+  const timestamp = new Date(modified);
+  if (Number.isNaN(timestamp.getTime())) {
+    return '';
+  }
+  const month = `${timestamp.getMonth() + 1}`.padStart(2, '0');
+  const day = `${timestamp.getDate()}`.padStart(2, '0');
+  const hour = `${timestamp.getHours()}`.padStart(2, '0');
+  const minute = `${timestamp.getMinutes()}`.padStart(2, '0');
+  return `${month}${day}-${hour}:${minute}`;
 }
 function BaudSelect({ value, set }: { value: string; set: (value: string) => void }): JSX.Element { return <select value={value} onChange={(event) => set(event.target.value)}>{['460800', '921600', '1000000', '2000000', '3000000'].map((rate) => <option key={rate} value={rate}>{Number(rate).toLocaleString()}</option>)}</select>; }
 function SerialPortSelect({ value, set, ports, emptyLabel = '未选择，请提供选择项' }: { value: string; set: (value: string) => void; ports: SerialPortInfo[]; emptyLabel?: string }): JSX.Element {

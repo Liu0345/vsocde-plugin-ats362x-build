@@ -10,6 +10,7 @@ test('工具版本解析兼容 Baton、actions-flash 与 dfu-util 输出', () =>
   assert.equal(parseToolVersion('baton 0.23.0'), '0.23.0');
   assert.equal(parseToolVersion('actions-flash 0.5.0'), '0.5.0');
   assert.equal(parseToolVersion('dfu-util 0.11\nCopyright 2005-2009'), '0.11');
+  assert.equal(parseToolVersion('v26.0.0'), '26.0.0');
   assert.equal(parseToolVersion('unknown version'), undefined);
 });
 

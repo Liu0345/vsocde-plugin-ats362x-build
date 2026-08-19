@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { ExtensionToWebview, ProjectState, WebviewToExtension } from './types';
+import { ExtensionToWebview, ProjectState, RunRequest, WebviewToExtension } from './types';
 import { buildCommand } from './services/commandBuilder';
 import { chooseFirmware, discoverFirmware, FirmwareEntry } from './services/firmwareLocator';
 import { HidDfuService } from './services/hidDfu';
@@ -14,6 +14,7 @@ import { listUsbDfuDevices, UsbDfuService } from './services/usbDfu';
 import { IdentityAuthorizationService } from './services/identityAuthorization';
 import { discoverBuildOptions } from './services/buildOptions';
 import { isWebviewDisposedError, WebviewRegistry } from './services/webviewRegistry';
+import { RelayController } from './services/relayController';
 import {
   createTemporaryEraseInventory,
   pulseSerialResetLines,
@@ -28,13 +29,16 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
   private readonly webviews = new WebviewRegistry<vscode.Webview>((error) => {
     console.error('[ATS362X] Webview message delivery failed', error);
   });
-  private state: ProjectState = { recentProjects: [], discoveredFirmware: [], serialPorts: [], tools: [], buildOptions: [] };
+  private state: ProjectState = { recentProjects: [], discoveredFirmware: [], serialPorts: [], tools: [], buildOptions: [], relayDevices: [] };
   private readonly terminal = new TerminalRunner();
   private readonly flashRunner = new FlashRunner();
   private readonly hid = new HidDfuService();
   private readonly usbDfu = new UsbDfuService();
   private readonly identity: IdentityAuthorizationService;
   private readonly serialReservation = new SerialPortReservation();
+  private readonly relay = new RelayController();
+  private queuedFlashRequest?: RunRequest;
+  private flashTransferComplete = false;
   private eraseAbort?: AbortController;
   private readonly usbDfuOutput = vscode.window.createOutputChannel('ATS362X USB DFU');
   private readonly flashOutput = vscode.window.createOutputChannel('ATS362X 串口烧录');
@@ -150,6 +154,11 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
         return true;
       })
     ];
+    const relayDevices = this.relay.list();
+    const previousRelayPath = this.state.relaySelectedPath;
+    const relaySelectedPath = previousRelayPath && relayDevices.some((device) => device.path === previousRelayPath)
+      ? previousRelayPath
+      : relayDevices[0]?.path;
     this.state = {
       projectPath,
       recentProjects: this.projects.recentProjects,
@@ -159,7 +168,12 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
       serialPorts: await listSerialPorts(),
       tools: await inspectTools(),
       buildOptions: await discoverBuildOptions(projectPath),
-      busy: this.state.busy
+      busy: this.state.busy,
+      flashQueued: this.state.flashQueued,
+      relayDevices,
+      relaySelectedPath,
+      relayMask: relaySelectedPath === previousRelayPath ? this.state.relayMask : undefined,
+      relayBusy: this.state.relayBusy
     };
     this.post({ type: 'state', state: this.state });
     this.post({ type: 'serialReservations', paths: this.serialReservation.reservedPaths });
@@ -231,10 +245,43 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
           );
           break;
         case 'run':
+          if (message.request.action === 'flash' && this.state.busy === 'flash') {
+            if (!this.flashTransferComplete) {
+              this.notice('warning', '当前串口烧录仍在进行');
+              break;
+            }
+            if (this.queuedFlashRequest) {
+              this.notice('warning', '下一次串口烧录已排队，请等待当前任务释放串口');
+              break;
+            }
+            this.queuedFlashRequest = message.request;
+            this.state.flashQueued = true;
+            this.post({ type: 'state', state: this.state });
+            this.notice('info', '下一次串口烧录已排队，当前 Baton 收尾后自动开始');
+            break;
+          }
           await this.run(message.request);
           break;
         case 'listHid':
           this.post({ type: 'hidDevices', devices: await this.hid.list() });
+          break;
+        case 'listRelays':
+          this.scanRelays();
+          this.notice(
+            'info',
+            this.state.relayDevices.length > 0
+              ? `已发现 ${this.state.relayDevices.length} 个 USB HID 继电器；扫描未占用 HID 接口`
+              : '未发现 USB HID 继电器'
+          );
+          break;
+        case 'selectRelay':
+          this.selectRelay(message.path);
+          break;
+        case 'relayRead':
+          await this.readRelayState(message.path);
+          break;
+        case 'relayChannel':
+          await this.setRelayChannel(message.path, message.channel, message.enabled);
           break;
         case 'listUsbDfu':
           this.post({
@@ -268,6 +315,10 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
           this.hid.cancel();
           this.notice('warning', '正在取消 HID DFU…');
           break;
+        case 'flashAbort':
+          this.flashRunner.cancel();
+          this.notice('warning', '正在取消串口烧录…');
+          break;
         case 'eraseAbort':
           this.eraseAbort?.abort();
           this.flashRunner.cancel();
@@ -288,6 +339,66 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
       const messageText = error instanceof Error ? error.message : String(error);
       this.notice('error', messageText);
       void vscode.window.showErrorMessage(`ATS362X：${messageText}`);
+    }
+  }
+
+  /** 重新枚举继电器；node-hid devices() 不会打开或占用 HID 接口。 */
+  private scanRelays(): void {
+    const devices = this.relay.list();
+    const previousPath = this.state.relaySelectedPath;
+    const selectedPath = previousPath && devices.some((device) => device.path === previousPath)
+      ? previousPath
+      : devices[0]?.path;
+    this.state.relayDevices = devices;
+    this.state.relaySelectedPath = selectedPath;
+    if (selectedPath !== previousPath) this.state.relayMask = undefined;
+    this.post({ type: 'state', state: this.state });
+  }
+
+  private selectRelay(devicePath: string): void {
+    if (devicePath && !this.state.relayDevices.some((device) => device.path === devicePath)) {
+      throw new Error('所选 USB HID 继电器已经断开，请重新扫描');
+    }
+    this.state.relaySelectedPath = devicePath || undefined;
+    this.state.relayMask = undefined;
+    this.post({ type: 'state', state: this.state });
+  }
+
+  private async readRelayState(devicePath: string): Promise<void> {
+    this.assertRelayReady(devicePath);
+    this.state.relayBusy = true;
+    this.post({ type: 'state', state: this.state });
+    try {
+      const mask = await this.relay.readState(devicePath);
+      this.state.relayMask = mask;
+      this.notice('info', `继电器状态读取完成：0x${formatRelayMask(mask)}；HID 接口已释放`);
+    } finally {
+      this.state.relayBusy = false;
+      this.post({ type: 'state', state: this.state });
+    }
+  }
+
+  private async setRelayChannel(devicePath: string, channel: number, enabled: boolean): Promise<void> {
+    this.assertRelayReady(devicePath);
+    this.state.relayBusy = true;
+    this.post({ type: 'state', state: this.state });
+    try {
+      const result = await this.relay.setChannel(devicePath, channel, enabled);
+      this.state.relayMask = result.after;
+      this.notice(
+        'info',
+        `继电器 CH${channel} 已${enabled ? '开启' : '关闭'}：0x${formatRelayMask(result.before)} -> 0x${formatRelayMask(result.after)}；其余通道保持不变，HID 接口已释放`
+      );
+    } finally {
+      this.state.relayBusy = false;
+      this.post({ type: 'state', state: this.state });
+    }
+  }
+
+  private assertRelayReady(devicePath: string): void {
+    if (this.state.relayBusy) throw new Error('已有继电器操作正在执行');
+    if (!devicePath || !this.state.relayDevices.some((device) => device.path === devicePath)) {
+      throw new Error('请先扫描并选择 USB HID 继电器');
     }
   }
 
@@ -325,7 +436,7 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async run(request: import('./types').RunRequest): Promise<void> {
+  private async run(request: RunRequest): Promise<void> {
     const cwd = this.projects.selectedProject;
     if (!cwd) throw new Error('请先选择项目目录');
     await this.checkRunSerialPort(request);
@@ -345,23 +456,47 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
     const command = buildCommand(request, firmware);
 
     if (request.action === 'flash') {
+      this.flashTransferComplete = false;
+      this.state.flashQueued = false;
       this.state.busy = 'flash';
       this.post({ type: 'state', state: this.state });
       this.flashOutput.clear();
       this.flashOutput.appendLine(`命令: ${command.executable} ${command.args.join(' ')}`);
       this.flashOutput.show(true);
       this.post({ type: 'progress', action: 'flash', percent: 0, detail: '准备执行串口烧录' });
+      let lastProgress = 0;
       try {
         await this.flashRunner.run(cwd, command, (percent, detail) => {
+          lastProgress = Math.max(lastProgress, percent);
+          if (percent >= 100) this.flashTransferComplete = true;
           this.post({ type: 'progress', action: 'flash', percent, detail });
           this.flashOutput.appendLine(`${percent.toString().padStart(3, ' ')}% ${detail}`);
         }, (text) => {
           this.flashOutput.append(text);
         }, '烧录', this.flashToolPaths());
         this.notice('info', `串口固件烧录命令已完成：${command.executable} ${command.args.join(' ')}`);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        const cancelled = /已取消|SIGINT|SIGTERM/i.test(detail);
+        this.post({
+          type: 'progress',
+          action: 'flash',
+          percent: lastProgress,
+          detail: cancelled ? '串口烧录已取消，可以重新烧录' : '串口烧录失败，可以重新烧录'
+        });
+        throw error;
       } finally {
+        const queuedRequest = this.queuedFlashRequest;
+        this.queuedFlashRequest = undefined;
+        this.flashTransferComplete = false;
         this.state.busy = undefined;
+        this.state.flashQueued = false;
         this.post({ type: 'state', state: this.state });
+        if (queuedRequest) {
+          queueMicrotask(() => {
+            void this.handle({ type: 'run', request: queuedRequest });
+          });
+        }
       }
       return;
     }
@@ -547,6 +682,11 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
   private async checkRunSerialPort(request: import('./types').RunRequest): Promise<void> {
     if (request.action === 'flash' && typeof request.options.uart === 'string' && request.options.uart.trim()) {
       await this.assertSerialPortAvailable(request.options.uart, '固件烧录');
+    }
+    if (request.action === 'flash' && request.options.entry === 'shell' &&
+        typeof request.options.shellPort === 'string' && request.options.shellPort.trim() &&
+        request.options.shellPort !== request.options.uart) {
+      await this.assertSerialPortAvailable(request.options.shellPort, 'Shell 操作');
     }
     if (request.action === 'erase' && request.options.entry === 'shell' && request.options.dryRun !== true &&
         typeof request.options.shellPort === 'string' && request.options.shellPort.trim()) {
@@ -780,4 +920,8 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
 function getNonce(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   return Array.from({ length: 32 }, () => chars.charAt(Math.floor(Math.random() * chars.length))).join('');
+}
+
+function formatRelayMask(mask: number): string {
+  return mask.toString(16).padStart(2, '0').toUpperCase();
 }

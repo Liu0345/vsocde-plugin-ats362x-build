@@ -99,6 +99,11 @@ select.select-empty option { color: var(--vscode-dropdown-foreground, var(--vsco
 .recent-list strong, .recent-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-list small { color: var(--muted); font-weight: 400; font-size: 11px; }
 .tool-grid { display: grid; gap: 7px; }
+.relay-status { display: flex; min-height: 24px; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; color: var(--muted); font-size: 11px; }
+.relay-status code { padding: 3px 6px; border-radius: 4px; background: var(--vscode-textCodeBlock-background); white-space: nowrap; }
+.relay-channel-grid { display: grid; grid-template-columns: repeat(8, minmax(42px, 1fr)); gap: 6px; margin: 8px 0 10px; }
+.relay-channel-grid .check { min-height: 34px; justify-content: center; padding: 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--vscode-textCodeBlock-background); color: var(--vscode-foreground); }
+.relay-callout { margin: 0; }
 .tool { display: flex; align-items: flex-start; gap: 8px; }
 .tool div { min-width: 0; display: grid; gap: 2px; }
 .tool strong { font-size: 13px; }
@@ -204,6 +209,10 @@ details { margin-top: 10px; color: var(--muted); font-size: 12px; }
   .identity-connect-fields, .identity-account-fields { grid-template-columns: minmax(0, 1fr); }
   .identity-connection-grid { gap: 12px; }
   .project-source-grid { grid-template-columns: minmax(0, 1fr); }
+  .relay-channel-grid { grid-template-columns: repeat(4, minmax(42px, 1fr)); }
+}
+@media (max-width: 330px) {
+  .relay-channel-grid { grid-template-columns: repeat(2, minmax(42px, 1fr)); }
 }
 @media (min-width: 820px) {
   .build-flash-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

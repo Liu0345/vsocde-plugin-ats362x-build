@@ -55,6 +55,27 @@ test('串口自动烧录根据固件扩展名选择现有方式', () => {
   );
 });
 
+test('Shell 串口烧录明确传递 ADFU 重启参数', () => {
+  const command = buildCommand({
+    action: 'flash',
+    options: {
+      method: 'auto',
+      entry: 'shell',
+      uart: '/dev/cu.usbmodem01234567893',
+      shellPort: '/dev/cu.usbmodem01234567893',
+      shellBaud: '3000000',
+      shellCmd: 'dbg reboot adfu'
+    }
+  }, '/tmp/app_ota.bin');
+  assert.deepEqual(command.args, [
+    'flash', '/tmp/app_ota.bin', '--method', 'ota-uart', '--entry', 'shell',
+    '--uart', '/dev/cu.usbmodem01234567893',
+    '--shell-port', '/dev/cu.usbmodem01234567893',
+    '--shell-baud', '3000000',
+    '--shell-cmd', 'dbg reboot adfu'
+  ]);
+});
+
 test('全擦除可使用一次性 inventory 和设备别名', () => {
   const command = buildCommand({
     action: 'erase',

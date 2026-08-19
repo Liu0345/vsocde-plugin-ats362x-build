@@ -33,6 +33,11 @@ interface State {
   tools: Tool[];
   buildOptions: BuildOptionInfo[];
   busy?: string;
+  flashQueued?: boolean;
+  relayDevices: RelayDevice[];
+  relaySelectedPath?: string;
+  relayMask?: number;
+  relayBusy?: boolean;
 }
 interface SerialPortInfo { path: string; manufacturer?: string; serialNumber?: string; vendorId?: string; productId?: string }
 interface HidDevice {
@@ -43,6 +48,14 @@ interface HidDevice {
   manufacturer?: string;
   serialNumber?: string;
   usagePage?: number;
+}
+interface RelayDevice {
+  path: string;
+  vendorId: number;
+  productId: number;
+  product?: string;
+  manufacturer?: string;
+  serialNumber?: string;
 }
 interface UsbDfuDevice {
   key: string;
@@ -83,7 +96,7 @@ interface IdentityEvent {
 }
 interface IdentityResult { target: IdentityTarget; status: IdentityStatus; summary: string; fields?: Record<string, string> }
 
-const initialState: State = { recentProjects: [], discoveredFirmware: [], serialPorts: [], tools: [], buildOptions: [] };
+const initialState: State = { recentProjects: [], discoveredFirmware: [], serialPorts: [], tools: [], buildOptions: [], relayDevices: [] };
 
 function App(): JSX.Element {
   const [page, setPage] = useState<Page>('project');
@@ -318,6 +331,9 @@ function FlashPage({
   const [verify, setVerify] = useState('boot');
   const [uart, setUart] = useState('');
   const [baud, setBaud] = useState('2000000');
+  const [shellPort, setShellPort] = useState('');
+  const [shellBaud, setShellBaud] = useState('3000000');
+  const [shellCmd, setShellCmd] = useState('dbg reboot adfu');
   const [timeout, setTimeoutValue] = useState('');
   const [vidPid, setVidPid] = useState('10d6:10d6');
   const [dryRun, setDryRun] = useState(false);
@@ -338,6 +354,8 @@ function FlashPage({
   }, [selectedFirmware, firmwareCandidates]);
   const busy = state.busy === 'flash';
   const flashProgress = progress.action === 'flash' ? progress : { action: '', percent: 0, detail: '' };
+  const transferComplete = busy && flashProgress.percent >= 100;
+  const flashQueued = Boolean(state.flashQueued);
   return <Card title="串口固件烧录">
       <Field label="烧录固件"><div className="input-action"><PlaceholderSelect value={selectedFirmware} onChange={(event) => setSelectedFirmware(event.target.value)}><option value="">空白-选项</option>{firmwareCandidates.map((file) => <option key={file.path} value={file.path} title={file.path}>{formatFirmwareOption(file)}</option>)}</PlaceholderSelect><div className="inline-actions"><button className="secondary" onClick={() => vscode.postMessage({ type: 'scanFirmware' })}>扫描</button><button className="secondary" onClick={() => vscode.postMessage({ type: 'selectFirmware' })}>选择固件</button></div></div></Field>
       <Field label="烧录方式"><select value={method} onChange={(e) => setMethod(e.target.value)}>
@@ -345,10 +363,14 @@ function FlashPage({
       </select></Field>
       <div className="columns"><Field label="进入方式"><select value={entry} onChange={(e) => setEntry(e.target.value)}><option value="power-cycle">power-cycle</option><option value="manual">ADFU</option><option value="shell">shell</option></select></Field><Field label="烧录后校验"><select value={verify} onChange={(e) => setVerify(e.target.value)}><option value="boot">boot</option><option value="enum">enum</option><option value="none">none</option></select></Field></div>
       <div className="columns flash-serial-fields"><Field label="UART 串口"><SerialPortControl value={uart} set={setUart} ports={state.serialPorts} reserved={reservedSerialPorts.includes(uart)} /></Field><Field label="波特率"><BaudSelect value={baud} set={setBaud} /></Field></div>
+      {entry === 'shell' && <><Field label="Shell UART"><SerialPortControl value={shellPort} set={setShellPort} ports={state.serialPorts} emptyLabel="使用烧录 UART" reserved={reservedSerialPorts.includes(shellPort)} /></Field><div className="columns"><Field label="Shell 波特率"><BaudSelect value={shellBaud} set={setShellBaud} /></Field><Field label="Shell 重启命令"><input value={shellCmd} onChange={(e) => setShellCmd(e.target.value)} /></Field></div></>}
       <div className="columns"><Field label="超时秒数"><input value={timeout} onChange={(e) => setTimeoutValue(e.target.value)} /></Field><Field label="ADFU VID:PID"><input value={vidPid} onChange={(e) => setVidPid(e.target.value)} /></Field></div>
       <Check label="仅预演，不写设备" checked={dryRun} set={setDryRun} />
       {(busy || flashProgress.detail) && <TransferProgressBar progress={flashProgress} />}
-      <button disabled={busy || !state.projectPath || !selectedFirmware} onClick={() => run('flash', { firmware: selectedFirmware, method, entry, verify, uart, baud, timeout, vidPid, dryRun })}>开始烧录</button>
+      <div className="button-row">
+        <button disabled={flashQueued || (busy && !transferComplete) || !state.projectPath || !selectedFirmware} onClick={() => run('flash', { firmware: selectedFirmware, method, entry, verify, uart, baud, timeout, vidPid, shellPort: shellPort || uart, shellBaud, shellCmd, dryRun })}>{flashQueued ? '下一次烧录已排队' : transferComplete ? '开始烧录' : busy ? '正在烧录…' : '开始烧录'}</button>
+        {busy && flashProgress.percent < 100 && <button className="danger" onClick={() => vscode.postMessage({ type: 'flashAbort' })}>取消烧录</button>}
+      </div>
       <div className="flash-firmware-source"><PathValue label="当前固件来源" value={firmware} empty="未发现固件" /></div>
   </Card>;
 }
@@ -774,6 +796,9 @@ function ToolsPage({ state, notices, reservedSerialPorts, progress }: { state: S
   const busy = Boolean(state.busy);
   const eraseProgress = progress.action === 'erase' ? progress : { action: '', percent: 0, detail: '' };
   const erasing = state.busy === 'erase';
+  const relayPath = state.relaySelectedPath ?? '';
+  const relayDevice = state.relayDevices.find((device) => device.path === relayPath);
+  const relayMaskKnown = typeof state.relayMask === 'number';
   return <>
     <Card title="工具状态" subtitle="插件调用现有 Baton / Actions Flash，并内置 HID 传输层">
       <div className="tool-grid">{state.tools.map((tool) => <div className="tool" key={tool.name}>
@@ -790,6 +815,42 @@ function ToolsPage({ state, notices, reservedSerialPorts, progress }: { state: S
         <button className="secondary" disabled={!state.projectPath} onClick={() => run('listAdfu', {})}>列出 ADFU</button>
         <button className="secondary" disabled={!state.projectPath} onClick={() => run('extractFw', {})}>解包 .fw</button>
       </div>
+    </Card>
+    <Card title="USB HID 继电器" subtitle="自动扫描 VID:PID 16C0:05DF；扫描和选择不会打开 HID 接口">
+      <div className="input-action">
+        <PlaceholderSelect
+          value={relayPath}
+          selectedLabel={relayDevice ? relayDeviceLabel(relayDevice) : undefined}
+          preferTail={false}
+          disabled={Boolean(state.relayBusy)}
+          onChange={(event) => vscode.postMessage({ type: 'selectRelay', path: event.target.value })}
+        >
+          <option value="">空白-选项</option>
+          {state.relayDevices.map((device) => <option key={device.path} value={device.path}>{relayDeviceLabel(device)}</option>)}
+        </PlaceholderSelect>
+        <div className="inline-actions">
+          <button className="secondary" disabled={Boolean(state.relayBusy)} onClick={() => vscode.postMessage({ type: 'listRelays' })}>扫描</button>
+          <button className="secondary" disabled={!relayPath || Boolean(state.relayBusy)} onClick={() => vscode.postMessage({ type: 'relayRead', path: relayPath })}>读取状态</button>
+        </div>
+      </div>
+      <div className="relay-status">
+        <span>{state.relayDevices.length > 0 ? `发现 ${state.relayDevices.length} 个继电器，已自动选择可用设备` : '未发现继电器'}</span>
+        <code>{relayMaskKnown ? `状态 0x${state.relayMask!.toString(16).padStart(2, '0').toUpperCase()}` : '状态未读取'}</code>
+      </div>
+      <div className="relay-channel-grid">
+        {Array.from({ length: 8 }, (_, index) => {
+          const channel = index + 1;
+          const checked = relayMaskKnown && Boolean(state.relayMask! & (1 << index));
+          return <Check
+            key={channel}
+            label={`CH${channel}`}
+            checked={checked}
+            disabled={!relayPath || Boolean(state.relayBusy)}
+            set={(enabled) => vscode.postMessage({ type: 'relayChannel', path: relayPath, channel, enabled })}
+          />;
+        })}
+      </div>
+      <div className="callout relay-callout">勾选对应 CH 即开启，再次点击取消勾选即关闭。每次操作仅临时占用 HID：先读取完整位图，只修改目标通道并复核其余通道不变，随后立即释放接口。</div>
     </Card>
     <Card title="全擦除 Flash" subtitle="危险操作：执行前插件会再次弹窗确认">
       <div className="columns"><Field label="进入方式"><select value={entry} onChange={(e) => setEntry(e.target.value)}><option value="manual">ADFU</option><option value="shell">shell</option></select></Field><Field label="擦除大小（字节）"><input value={size} onChange={(e) => setSize(e.target.value)} /></Field></div>
@@ -1007,6 +1068,16 @@ function hidDfuDeviceLabel(device: HidDevice, companion?: UsbDfuDevice): string 
     device.productId,
     device.serialNumber ?? companion?.serialNumber,
     device.usagePage ? `HID usage 0x${hex(device.usagePage)}` : 'HID'
+  );
+}
+function relayDeviceLabel(device: RelayDevice): string {
+  return formatDfuDeviceLabel(
+    device.manufacturer,
+    device.product,
+    device.vendorId,
+    device.productId,
+    device.serialNumber,
+    'USBRelay8'
   );
 }
 function formatDfuDeviceLabel(manufacturer: string | undefined, product: string | undefined, vendorId: number, productId: number, serialNumber: string | undefined, fallback: string): string {

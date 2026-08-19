@@ -12,7 +12,7 @@ export const TOOL_REQUIREMENTS: Readonly<Record<ToolName, string>> = {
 };
 
 export function parseToolVersion(output: string): string | undefined {
-  return output.match(/\b(\d+(?:\.\d+){1,3})(?:[-+][0-9A-Za-z.-]+)?\b/)?.[1];
+  return output.match(/(?:^|\s|[=:])v?(\d+(?:\.\d+){1,3})(?:[-+][0-9A-Za-z.-]+)?\b/im)?.[1];
 }
 
 export function satisfiesMinimumVersion(actual: string, minimum: string): boolean {

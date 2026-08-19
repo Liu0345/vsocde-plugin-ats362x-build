@@ -19,6 +19,11 @@ export interface ProjectState {
   tools: ToolStatus[];
   buildOptions: BuildOptionInfo[];
   busy?: string;
+  flashQueued?: boolean;
+  relayDevices: RelayDeviceInfo[];
+  relaySelectedPath?: string;
+  relayMask?: number;
+  relayBusy?: boolean;
 }
 
 export interface BuildOptionInfo {
@@ -102,6 +107,15 @@ export interface HidDeviceInfo {
   usage?: number;
 }
 
+export interface RelayDeviceInfo {
+  path: string;
+  vendorId: number;
+  productId: number;
+  product?: string;
+  manufacturer?: string;
+  serialNumber?: string;
+}
+
 export interface UsbDfuDeviceInfo {
   key: string;
   vendorId: number;
@@ -153,6 +167,11 @@ export type WebviewToExtension =
   | { type: 'usbDfuAbort' }
   | { type: 'hidDfu'; path: string; firmware: string; expectedBcd: number }
   | { type: 'hidAbort'; path: string }
+  | { type: 'flashAbort' }
+  | { type: 'listRelays' }
+  | { type: 'selectRelay'; path: string }
+  | { type: 'relayRead'; path: string }
+  | { type: 'relayChannel'; path: string; channel: number; enabled: boolean }
   | { type: 'eraseAbort' }
   | { type: 'identityAction'; request: IdentityRequest }
   | { type: 'identityCancel' };

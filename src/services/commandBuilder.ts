@@ -42,6 +42,11 @@ export function buildCommand(request: RunRequest, firmware?: string): BuiltComma
       addOption(args, '--baud', value.baud);
       addOption(args, '--timeout', value.timeout);
       addOption(args, '--adfu-vid-pid', value.vidPid);
+      if (value.entry === 'shell') {
+        addOption(args, '--shell-port', value.shellPort);
+        addOption(args, '--shell-baud', value.shellBaud);
+        addOption(args, '--shell-cmd', value.shellCmd);
+      }
       addFlag(args, '--dry-run', value.dryRun);
       return { executable: 'baton', args };
     }

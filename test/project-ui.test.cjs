@@ -41,7 +41,7 @@ test('编译与烧录合并并移除重复固件来源卡片', () => {
   const buildPage = source.match(/function BuildPage[\s\S]*?function EditableBuildOption/)?.[0] ?? '';
   const flashPage = source.match(/function FlashPage[\s\S]*?function UsbDfuPage/)?.[0] ?? '';
   assert.doesNotMatch(buildPage, /当前固件来源/, '固件编译卡片不应显示当前固件来源');
-  assert.match(flashPage, /开始烧录<\/button>\s*<div className="flash-firmware-source"><PathValue label="当前固件来源"/, '当前固件来源应位于串口烧录卡片最底部');
+  assert.match(flashPage, /'开始烧录'\}<\/button>[\s\S]*?<div className="flash-firmware-source"><PathValue label="当前固件来源"/, '当前固件来源应位于串口烧录卡片最底部');
   assert.doesNotMatch(flashPage, /仅负责 UART OTA \/ UART ADFU/, '串口烧录卡片不需要额外说明');
 });
 
@@ -53,6 +53,18 @@ test('项目和固件来源独立布局且工具状态移入工具页', () => {
   assert.doesNotMatch(projectPage, /title="工具状态"/);
   assert.match(toolsPage, /title="工具状态"/);
   assert.match(style, /\.project-source-grid \{[^}]*align-items: start;/, '左右两列高度变化必须互不拉伸');
+});
+
+test('工具页继电器默认扫描，CH1～CH8 每次勾选动作临时占用 HID', () => {
+  const toolsPage = source.match(/function ToolsPage[\s\S]*?function Card/)?.[0] ?? '';
+  const provider = fs.readFileSync(path.join(__dirname, '..', 'src', 'sidebarProvider.ts'), 'utf8');
+  assert.match(toolsPage, /title="USB HID 继电器"/);
+  assert.match(toolsPage, /state\.relayDevices\.map/);
+  assert.match(toolsPage, /Array\.from\(\{ length: 8 \}/);
+  assert.match(toolsPage, /type: 'relayChannel'/);
+  assert.match(toolsPage, /每次操作仅临时占用 HID/);
+  assert.match(provider, /case 'ready':[\s\S]*?this\.refresh\(\)/);
+  assert.match(provider, /case 'relayChannel'/);
 });
 
 test('插件开头始终说明每个工具的版本要求与检测结果', () => {
@@ -105,6 +117,23 @@ test('串口烧录默认自动选择方式且 manual 入口统一显示为 ADFU'
   assert.match(toolsPage, /<option value="manual">ADFU<\/option>/);
   assert.doesNotMatch(flashPage, />manual<\/option>/);
   assert.doesNotMatch(toolsPage, />manual<\/option>/);
+});
+
+test('串口烧录显示递进进度并在执行期间提供取消按钮', () => {
+  const flashPage = source.match(/function FlashPage[\s\S]*?function UsbDfuPage/)?.[0] ?? '';
+  const provider = fs.readFileSync(path.join(__dirname, '..', 'src', 'sidebarProvider.ts'), 'utf8');
+  assert.match(flashPage, /<TransferProgressBar progress=\{flashProgress\}/);
+  assert.match(flashPage, /busy && flashProgress\.percent < 100/);
+  assert.match(flashPage, /const transferComplete = busy && flashProgress\.percent >= 100/);
+  assert.match(flashPage, /flashQueued/);
+  assert.match(flashPage, /transferComplete \? '开始烧录'/);
+  assert.match(flashPage, /type: 'flashAbort'/);
+  assert.match(flashPage, />取消烧录<\/button>/);
+  assert.match(flashPage, /dbg reboot adfu/);
+  assert.match(flashPage, /shellPort: shellPort \|\| uart/);
+  assert.match(provider, /case 'flashAbort':[\s\S]*?this\.flashRunner\.cancel\(\)/);
+  assert.match(provider, /queuedFlashRequest/);
+  assert.match(provider, /下一次串口烧录已排队/);
 });
 
 test('选择内容超出宽度时优先显示末尾', () => {

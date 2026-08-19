@@ -320,6 +320,9 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
     const cwd = this.projects.selectedProject;
     if (!cwd) throw new Error('请先选择项目目录');
     await this.checkRunSerialPort(request);
+    if (request.action === 'erase' && request.options.dryRun !== true) {
+      this.validateEraseOptions(request.options);
+    }
     const preference = request.action === 'extractFw' || request.options.method === 'fw-usb' || request.options.method === 'fw-uart'
       ? 'fw'
       : request.options.method === 'ota-uart' || request.action === 'usbDfu' ? 'ota' : 'any';
@@ -373,14 +376,58 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
       this.flashOutput.appendLine(`命令: ${command.executable} ${command.args.join(' ')}`);
       this.flashOutput.show(true);
       this.post({ type: 'progress', action: 'erase', percent: 0, detail: '准备执行全擦除' });
-      try {
-        await this.flashRunner.run(cwd, command, (percent, detail) => {
-          this.post({ type: 'progress', action: 'erase', percent, detail });
-          this.flashOutput.appendLine(`${percent.toString().padStart(3, ' ')}% ${detail}`);
+
+      const appendProgress = (percent: number, detail: string): void => {
+        this.post({ type: 'progress', action: 'erase', percent, detail });
+        this.flashOutput.appendLine(`${percent.toString().padStart(3, ' ')}% ${detail}`);
+      };
+      const executeErase = async (runRequest: import('./types').RunRequest): Promise<{ command: string; output: string; }> => {
+        const resolvedCommand = buildCommand(runRequest, undefined);
+        this.flashOutput.appendLine(`执行命令: ${resolvedCommand.executable} ${resolvedCommand.args.join(' ')}`);
+        let outputBuffer = '';
+        await this.flashRunner.run(cwd, resolvedCommand, (percent, detail) => {
+          appendProgress(percent, detail);
+          outputBuffer += `${detail}\n`;
         }, (text) => {
+          outputBuffer += text;
           this.flashOutput.append(text);
         }, '全擦除');
-        this.notice('info', `全擦除命令已完成：${command.executable} ${command.args.join(' ')}`);
+        return {
+          command: `${resolvedCommand.executable} ${resolvedCommand.args.join(' ')}`,
+          output: outputBuffer
+        };
+      };
+
+      try {
+        let result = await executeErase(request);
+        const likelyExecuted = this.hasEraseCommandOutput(result.output);
+        if (!request.options.dryRun && request.options.entry === 'shell' && !likelyExecuted) {
+          const retry = await vscode.window.showWarningMessage(
+            '未检测到明显擦除执行输出，设备可能已在 ADFU。是否改为 manual 模式再试一次？',
+            { modal: true },
+            '改为 manual 重试',
+            '取消'
+          );
+          if (retry === '改为 manual 重试') {
+            const manualRequest = {
+              ...request,
+              options: {
+                ...request.options,
+                entry: 'manual',
+                shellPort: '',
+                shellBaud: '',
+                shellCmd: ''
+              }
+            };
+            result = await executeErase(manualRequest);
+          }
+        }
+        const finalHasErase = this.hasEraseCommandOutput(result.output);
+        if (!request.options.dryRun && !finalHasErase) {
+          this.flashOutput.appendLine('⚠️ 提示：未检测到 native-usb-adfu-erase 关键字，建议检查 ADFU VID:PID 与设备状态。');
+          this.notice('warning', '全擦除执行完成，但未检测到明显擦除动作标记，请核对设备是否真正进入 ADFU。');
+        }
+        this.notice('info', `全擦除命令已完成：${result.command}`);
       } finally {
         this.state.busy = undefined;
         this.post({ type: 'state', state: this.state });
@@ -390,6 +437,32 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
 
     await this.terminal.run(command, cwd);
     this.notice('info', `已在终端运行：${command.executable} ${command.args.join(' ')}`);
+  }
+
+  private validateEraseOptions(options: Record<string, string | number | boolean | undefined>): void {
+    const parsePositiveInt = (value: unknown, label: string): number | undefined => {
+      if (value === undefined || value === null || String(value).trim() === '') {
+        return undefined;
+      }
+      const text = String(value).trim();
+      if (!/^\d+$/.test(text)) {
+        throw new Error(`${label}必须为正整数`);
+      }
+      const parsed = Number.parseInt(text, 10);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new Error(`${label}必须为正整数`);
+      }
+      return parsed;
+    };
+    parsePositiveInt(options.size, '擦除大小');
+    parsePositiveInt(options.timeout, '超时秒数');
+    if (options.vidPid && !/^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$/.test(String(options.vidPid).trim())) {
+      throw new Error('ADFU VID:PID 格式应为 XXXX:XXXX');
+    }
+  }
+
+  private hasEraseCommandOutput(output: string): boolean {
+    return /native-usb-adfu-erase/i.test(output) || /\b擦除\b/.test(output) || /\berase\b/i.test(output);
   }
 
   /** 对执行请求中的显式串口做最后一次占用检查，探测完成后立即释放。 */

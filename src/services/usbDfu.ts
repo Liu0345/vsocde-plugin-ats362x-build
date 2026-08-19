@@ -117,8 +117,10 @@ export async function listUsbDfuDevices(executable = 'dfu-util'): Promise<UsbDfu
     execFileAsync(executable, ['-l'], { timeout: 5000, maxBuffer: 4 * 1024 * 1024 })
   ]);
   const records = parseDfuUtilList(`${result.stdout}\n${result.stderr}`);
-  return records
-    .filter((record) => record.mode === 'Runtime' && uacIds.has(usbId(record.vendorId, record.productId)))
+  const runtimeRecords = records.filter((record) => record.mode === 'Runtime');
+  const preferredRecords = uacIds.size === 0 ? runtimeRecords : runtimeRecords.filter((record) => uacIds.has(usbId(record.vendorId, record.productId)));
+  const effectiveRecords = preferredRecords.length > 0 ? preferredRecords : runtimeRecords;
+  return effectiveRecords
     .map((record) => ({
       key: `${usbId(record.vendorId, record.productId)}@${record.usbPath}#${record.serialNumber ?? ''}`,
       vendorId: record.vendorId,

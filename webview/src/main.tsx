@@ -384,7 +384,7 @@ function UsbDfuPage({ state, devices, hidDevices, selectedFirmware, selectedDevi
       dfuName={device.dfuName}
     />}
   >
-    <div className="callout">只显示同时枚举 USB Audio Class 与标准 DFU Runtime 接口的设备；传输时按 VID:PID 和 USB 物理路径锁定所选设备。单独选择的固件仅供本页面使用，不会改变其他功能的固件来源。</div>
+    <div className="callout">先按 USB Audio Class 进行设备筛选；若无法匹配到已识别的 UAC 设备，则回退显示全部 Runtime DFU 设备。传输时按 VID:PID 和 USB 物理路径锁定所选设备。单独选择的固件仅供本页面使用，不会改变其他功能的固件来源。</div>
     <div className="button-row"><button className="secondary" disabled={busy} onClick={scanDfuDevices}>扫描 UAC 设备</button><span className="muted">发现 {devices.length} 个可用设备</span></div>
     <Field label="UAC 设备"><PlaceholderSelect disabled={busy} value={selectedDeviceKey} selectedLabel={deviceLabel} preferTail={false} onChange={(event) => onDeviceKeyChange(event.target.value)}><option value="">空白-选项</option>{devices.map((item) => {
       const companion = findCompanionDevice(item, hidDevices);
@@ -476,7 +476,7 @@ function HidPage({ state, devices, usbDevices, progress, selectedDevicePath, onD
       dfuName={usbDevice?.dfuName}
     />}
   >
-    <div className="callout">HID DFU 不进入 ADFU 模式。设备必须已枚举普通 HID 接口，固件上需启用 HID 更新模块。</div>
+    <div className="callout">HID DFU 不进入 ADFU 模式。设备必须已枚举普通 HID 接口，固件上需启用 HID 更新模块。先按 UAC 信息进行筛选，匹配失败时会回退显示全部候选设备。</div>
     <div className="button-row"><button className="secondary" disabled={busy} onClick={scanDfuDevices}>扫描 UAC HID</button><span className="muted">发现 {devices.length} 个 UAC 厂商 HID 接口</span></div>
     <Field label="HID 设备"><PlaceholderSelect disabled={busy} value={selectedDevicePath} selectedLabel={deviceLabel} preferTail={false} onChange={(e) => onDevicePathChange(e.target.value)}><option value="">空白-选项</option>{devices.map((item) => {
       const companion = findCompanionDevice(item, usbDevices);
@@ -751,6 +751,7 @@ function ToolsPage({ state, notices, reservedSerialPorts, progress }: { state: S
   const [dryRun, setDryRun] = useState(false);
   const busy = Boolean(state.busy);
   const eraseProgress = progress.action === 'erase' ? progress : { action: '', percent: 0, detail: '' };
+  const erasing = state.busy === 'erase';
   return <>
     <Card title="工具状态" subtitle="插件调用现有 Baton / Actions Flash，并内置 HID 传输层">
       <div className="tool-grid">{state.tools.map((tool) => <div className="tool" key={tool.name}>
@@ -774,7 +775,10 @@ function ToolsPage({ state, notices, reservedSerialPorts, progress }: { state: S
       {entry === 'shell' && <><Field label="Shell UART"><SerialPortControl value={shellPort} set={setShellPort} ports={state.serialPorts} emptyLabel="使用设备配置" reserved={reservedSerialPorts.includes(shellPort)} /></Field><div className="columns"><Field label="Shell 波特率"><BaudSelect value={shellBaud} set={setShellBaud} /></Field><Field label="重启命令"><input value={shellCmd} onChange={(e) => setShellCmd(e.target.value)} /></Field></div></>}
       <Check label="仅预演，不擦除" checked={dryRun} set={setDryRun} />
       {(busy || eraseProgress.detail) && <TransferProgressBar progress={eraseProgress} />}
-      <button className="danger" disabled={!state.projectPath || busy} onClick={() => run('erase', { entry, size, timeout, vidPid, shellPort: entry === 'shell' ? shellPort : '', shellBaud: entry === 'shell' ? shellBaud : '', shellCmd: entry === 'shell' ? shellCmd : '', dryRun })}>{dryRun ? '预演全擦除' : '全擦除 Flash'}</button>
+      <div className="button-row">
+        <button className="danger" disabled={!state.projectPath || busy} onClick={() => run('erase', { entry, size, timeout, vidPid, shellPort: entry === 'shell' ? shellPort : '', shellBaud: entry === 'shell' ? shellBaud : '', shellCmd: entry === 'shell' ? shellCmd : '', dryRun })}>{dryRun ? '预演全擦除' : '全擦除 Flash'}</button>
+        {erasing && <button className="danger" onClick={() => vscode.postMessage({ type: 'eraseAbort' })}>取消全擦除</button>}
+      </div>
     </Card>
     <Card title="操作记录" subtitle="完整命令输出位于 ATS362X 集成终端">
       {notices.length === 0 ? <p className="muted">暂无操作</p> : <div className="logs">{notices.map((notice, index) => <div key={`${notice.time}-${index}`} className={notice.level}><time>{notice.time}</time><span>{notice.message}</span></div>)}</div>}

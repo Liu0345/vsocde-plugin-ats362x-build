@@ -36,13 +36,20 @@ export class HidDfuService {
   public async list(): Promise<HidDeviceInfo[]> {
     const hid = loadNodeHid();
     const uacIds = await detectUsbAudioDeviceIds();
-    return hid.devices()
+    const candidates = hid.devices()
       .filter((device) =>
         typeof device.path === 'string' &&
         Number(device.usagePage ?? 0) >= 0xff00 &&
-        Number(device.usage ?? 0) === 1 &&
-        uacIds.has(usbId(Number(device.vendorId ?? 0), Number(device.productId ?? 0)))
-      )
+        Number(device.usage ?? 0) === 1
+      );
+    const preferredDevices = uacIds.size === 0
+      ? candidates
+      : candidates.filter((device) => {
+        const id = usbId(Number(device.vendorId ?? 0), Number(device.productId ?? 0));
+        return uacIds.has(id);
+      });
+    const effectiveDevices = preferredDevices.length > 0 ? preferredDevices : candidates;
+    return effectiveDevices
       .map((device) => ({
         path: String(device.path),
         vendorId: Number(device.vendorId ?? 0),
@@ -186,9 +193,9 @@ async function crc32File(firmwarePath: string): Promise<number> {
 export function parseMacUsbAudioDeviceIds(output: string): Set<string> {
   const ids = new Set<string>();
   for (const section of output.split(/(?=^\+-o )/m)) {
-    const interfaceClass = firstDecimalProperty(section, 'bInterfaceClass');
-    const vendorId = firstDecimalProperty(section, 'idVendor');
-    const productId = firstDecimalProperty(section, 'idProduct');
+    const interfaceClass = firstNumericProperty(section, 'bInterfaceClass');
+    const vendorId = firstNumericProperty(section, 'idVendor');
+    const productId = firstNumericProperty(section, 'idProduct');
     if (interfaceClass === 1 && vendorId !== undefined && productId !== undefined) {
       ids.add(usbId(vendorId, productId));
     }
@@ -244,10 +251,29 @@ async function detectLinuxUsbAudioDeviceIds(): Promise<Set<string>> {
   return ids;
 }
 
-function firstDecimalProperty(section: string, property: string): number | undefined {
+function firstNumericProperty(section: string, property: string): number | undefined {
   const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = section.match(new RegExp(`^[ \\t|]*"${escaped}" = (\\d+)`, 'm'));
-  return match ? Number.parseInt(match[1], 10) : undefined;
+  const match = section.match(new RegExp(`^[ \\t|]*"${escaped}" = (.+)$`, 'm'));
+  if (!match) return undefined;
+
+  const valueText = String(match[1]).trim();
+  const decimalMatch = valueText.match(/^\s*(\d+)\s*$/);
+  if (decimalMatch) {
+    return Number.parseInt(decimalMatch[1], 10);
+  }
+  const looseHexMatch = valueText.match(/^\s*([0-9a-f]{3,4})\s*$/i);
+  if (looseHexMatch && /[a-f]/i.test(looseHexMatch[1])) {
+    return Number.parseInt(looseHexMatch[1], 16);
+  }
+  const hexMatch = valueText.match(/0x([0-9a-f]{1,4})/i);
+  if (hexMatch) {
+    return Number.parseInt(hexMatch[1], 16);
+  }
+  const tupleMatch = valueText.match(/<\s*([0-9a-f]{2,4})\s*>/i);
+  if (tupleMatch) {
+    return Number.parseInt(tupleMatch[1], 16);
+  }
+  return undefined;
 }
 
 function usbId(vendorId: number, productId: number): string {

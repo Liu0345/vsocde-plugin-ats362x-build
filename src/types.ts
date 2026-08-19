@@ -151,5 +151,6 @@ export type WebviewToExtension =
   | { type: 'usbDfuAbort' }
   | { type: 'hidDfu'; path: string; firmware: string; expectedBcd: number }
   | { type: 'hidAbort'; path: string }
+  | { type: 'eraseAbort' }
   | { type: 'identityAction'; request: IdentityRequest }
   | { type: 'identityCancel' };

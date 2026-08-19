@@ -260,6 +260,10 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
           this.hid.cancel();
           this.notice('warning', '正在取消 HID DFU…');
           break;
+        case 'eraseAbort':
+          this.flashRunner.cancel();
+          this.notice('warning', '正在取消全擦除…');
+          break;
         case 'identityAction':
           await this.runIdentityAuthorization(message.request);
           break;
@@ -351,6 +355,18 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
     }
 
     if (request.action === 'erase') {
+      if (request.options.entry === 'shell' && request.options.dryRun !== true &&
+          typeof request.options.shellPort === 'string' && request.options.shellPort.trim() === '') {
+        throw new Error('Shell 模式下必须填写 Shell UART 串口');
+      }
+      if (request.options.dryRun !== true) {
+        const answer = await vscode.window.showWarningMessage(
+          '全擦除会清除设备 Flash 中的全部内容，确认继续吗？',
+          { modal: true },
+          '确认全擦除'
+        );
+        if (answer !== '确认全擦除') return;
+      }
       this.state.busy = 'erase';
       this.post({ type: 'state', state: this.state });
       this.flashOutput.clear();

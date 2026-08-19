@@ -381,20 +381,68 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
         this.post({ type: 'progress', action: 'erase', percent, detail });
         this.flashOutput.appendLine(`${percent.toString().padStart(3, ' ')}% ${detail}`);
       };
-      const executeErase = async (runRequest: import('./types').RunRequest): Promise<{ command: string; output: string; }> => {
+      const executeErase = async (
+        runRequest: import('./types').RunRequest
+      ): Promise<{ command: string; output: string; fallbackByTimeout: boolean; }> => {
         const resolvedCommand = buildCommand(runRequest, undefined);
         this.flashOutput.appendLine(`执行命令: ${resolvedCommand.executable} ${resolvedCommand.args.join(' ')}`);
         let outputBuffer = '';
-        await this.flashRunner.run(cwd, resolvedCommand, (percent, detail) => {
-          appendProgress(percent, detail);
-          outputBuffer += `${detail}\n`;
-        }, (text) => {
-          outputBuffer += text;
-          this.flashOutput.append(text);
-        }, '全擦除');
+        let fallbackByTimeout = false;
+        let shellCommandSent = false;
+        let eraseDetected = false;
+        const outputHasErase = (text: string): boolean =>
+          /native-usb-adfu-erase/i.test(text) || /(?:^|[^\u4e00-\u9fa5\w])(erase|擦除)(?:$|[^\u4e00-\u9fa5\w])/i.test(text);
+        let completed = false;
+        let shellTimeoutHandle: NodeJS.Timeout | undefined;
+        if (runRequest.options.entry === 'shell' && runRequest.options.dryRun !== true) {
+          shellTimeoutHandle = setTimeout(() => {
+            if (!eraseDetected) {
+              fallbackByTimeout = true;
+              this.flashOutput.appendLine('未检测到擦除动作，正在中断后准备 manual 重试…');
+              this.flashRunner.cancel();
+            }
+          }, 12000);
+        }
+        const onCancelOrTimeout = (): boolean => {
+          if (shellTimeoutHandle) {
+            clearTimeout(shellTimeoutHandle);
+          }
+          return fallbackByTimeout;
+        };
+        try {
+          await this.flashRunner.run(cwd, resolvedCommand, (percent, detail) => {
+            appendProgress(percent, detail);
+            outputBuffer += `${detail}\n`;
+          }, (text) => {
+            outputBuffer += text;
+            this.flashOutput.append(text);
+            if (shellCommandSent && outputHasErase(outputBuffer)) {
+              eraseDetected = true;
+            }
+            if (/Sending runtime shell command/.test(text)) {
+              shellCommandSent = true;
+            }
+          }, '全擦除');
+          completed = true;
+        } catch (error) {
+          onCancelOrTimeout();
+          if (fallbackByTimeout) {
+            return {
+              command: `${resolvedCommand.executable} ${resolvedCommand.args.join(' ')}`,
+              output: outputBuffer,
+              fallbackByTimeout: true
+            };
+          }
+          throw error;
+        }
+        onCancelOrTimeout();
+        if (completed && !eraseDetected) {
+          this.flashOutput.appendLine('⚠️ 全擦除命令执行结束，但当前输出未检测到擦除动作关键字。');
+        }
         return {
           command: `${resolvedCommand.executable} ${resolvedCommand.args.join(' ')}`,
-          output: outputBuffer
+          output: outputBuffer,
+          fallbackByTimeout
         };
       };
 

@@ -383,34 +383,30 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
       };
       const executeErase = async (
         runRequest: import('./types').RunRequest
-      ): Promise<{ command: string; output: string; fallbackByTimeout: boolean; }> => {
+      ): Promise<{ command: string; output: string; }> => {
         const resolvedCommand = buildCommand(runRequest, undefined);
         this.flashOutput.appendLine(`执行命令: ${resolvedCommand.executable} ${resolvedCommand.args.join(' ')}`);
         let outputBuffer = '';
-        let fallbackByTimeout = false;
         let shellCommandSent = false;
         let eraseDetected = false;
+        let watchProgress = { percent: 0, detail: '准备执行全擦除' };
         const outputHasErase = (text: string): boolean =>
           /native-usb-adfu-erase/i.test(text) || /(?:^|[^\u4e00-\u9fa5\w])(erase|擦除)(?:$|[^\u4e00-\u9fa5\w])/i.test(text);
-        let completed = false;
+        const isAwaitingUsbAdfu = (text: string): boolean => /Waiting for USB ADFU/i.test(text) || /before erase/i.test(text);
         let shellTimeoutHandle: NodeJS.Timeout | undefined;
+        let shellWatchdogTriggered = false;
         if (runRequest.options.entry === 'shell' && runRequest.options.dryRun !== true) {
           shellTimeoutHandle = setTimeout(() => {
             if (!eraseDetected) {
-              fallbackByTimeout = true;
-              this.flashOutput.appendLine('未检测到擦除动作，正在中断后准备 manual 重试…');
-              this.flashRunner.cancel();
+              shellWatchdogTriggered = true;
+              this.flashOutput.appendLine('shell 模式长时间未看到擦除阶段输出，已继续等待；如仍无变化可改 manual 重试');
+              appendProgress(Math.max(10, watchProgress.percent), 'shell 重启命令已发送，正在等待 ADFU');
             }
-          }, 12000);
+          }, 30000);
         }
-        const onCancelOrTimeout = (): boolean => {
-          if (shellTimeoutHandle) {
-            clearTimeout(shellTimeoutHandle);
-          }
-          return fallbackByTimeout;
-        };
         try {
           await this.flashRunner.run(cwd, resolvedCommand, (percent, detail) => {
+            watchProgress = { percent, detail };
             appendProgress(percent, detail);
             outputBuffer += `${detail}\n`;
           }, (text) => {
@@ -418,31 +414,31 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
             this.flashOutput.append(text);
             if (shellCommandSent && outputHasErase(outputBuffer)) {
               eraseDetected = true;
+              if (shellTimeoutHandle) {
+                clearTimeout(shellTimeoutHandle);
+                shellTimeoutHandle = undefined;
+              }
+            }
+            if (isAwaitingUsbAdfu(text)) {
+              appendProgress(Math.max(15, watchProgress.percent), '已进入 ADFU 擦除前等待阶段');
             }
             if (/Sending runtime shell command/.test(text)) {
               shellCommandSent = true;
             }
           }, '全擦除');
-          completed = true;
         } catch (error) {
-          onCancelOrTimeout();
-          if (fallbackByTimeout) {
-            return {
-              command: `${resolvedCommand.executable} ${resolvedCommand.args.join(' ')}`,
-              output: outputBuffer,
-              fallbackByTimeout: true
-            };
-          }
+          if (shellTimeoutHandle) clearTimeout(shellTimeoutHandle);
           throw error;
         }
-        onCancelOrTimeout();
-        if (completed && !eraseDetected) {
+        if (shellTimeoutHandle) {
+          clearTimeout(shellTimeoutHandle);
+        }
+        if (shellWatchdogTriggered && !eraseDetected) {
           this.flashOutput.appendLine('⚠️ 全擦除命令执行结束，但当前输出未检测到擦除动作关键字。');
         }
         return {
           command: `${resolvedCommand.executable} ${resolvedCommand.args.join(' ')}`,
-          output: outputBuffer,
-          fallbackByTimeout
+          output: outputBuffer
         };
       };
 

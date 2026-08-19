@@ -12,7 +12,14 @@ const vscode = acquireVsCodeApi();
 const identityCredentialSession: { username: string; password: string } = { username: '', password: '' };
 
 type Page = 'project' | 'build' | 'dfu' | 'identity' | 'tools';
-interface Tool { name: string; label: string; available: boolean; detail: string }
+interface Tool {
+  name: string;
+  label: string;
+  available: boolean;
+  detail: string;
+  minimumVersion: string;
+  detectedVersion?: string;
+}
 interface BuildOptionInfo { app: string; boards: string[] }
 interface EditableChoiceOption { value: string; label?: string }
 interface FirmwareChoice { path: string; modified: number }
@@ -144,6 +151,7 @@ function App(): JSX.Element {
     </nav>
 
     <section className="content">
+      <ToolRequirements tools={state.tools} />
       {page === 'project' && <ProjectPage state={state} />}
       {page === 'build' && <div className="build-flash-grid">
         <BuildPage state={state} disabled={!state.projectPath} projectPath={state.projectPath} />
@@ -170,6 +178,20 @@ function App(): JSX.Element {
 
 function Tab({ id, label, icon, active, set }: { id: Page; label: string; icon: string; active: Page; set: (value: Page) => void }): JSX.Element {
   return <button className={active === id ? 'active' : ''} onClick={() => set(id)}><span>{icon}</span>{label}</button>;
+}
+
+function ToolRequirements({ tools }: { tools: Tool[] }): JSX.Element {
+  return <aside className="tool-requirements">
+    <div className="tool-requirements-title">
+      <strong>工具版本要求</strong>
+      <small>插件启动时检测；版本不足会在执行前阻止操作</small>
+    </div>
+    {tools.length === 0
+      ? <span className="requirement-pending">正在检测本机工具…</span>
+      : <div className="requirement-list">{tools.map((tool) => <span className={tool.available ? 'ok' : 'bad'} key={tool.name} title={tool.detail}>
+        {tool.label} &gt;= {tool.minimumVersion} · {tool.detectedVersion ? `当前 ${tool.detectedVersion}` : '未检测到'}
+      </span>)}</div>}
+  </aside>;
 }
 
 function ProjectPage({ state }: { state: State }): JSX.Element {
@@ -291,7 +313,7 @@ function FlashPage({
   reservedSerialPorts: string[];
   progress: TransferProgress;
 }): JSX.Element {
-  const [method, setMethod] = useState('ota-uart');
+  const [method, setMethod] = useState('auto');
   const [entry, setEntry] = useState('power-cycle');
   const [verify, setVerify] = useState('boot');
   const [uart, setUart] = useState('');
@@ -302,26 +324,26 @@ function FlashPage({
   const [selectedFirmware, setSelectedFirmware] = useState('');
   const firmware = state.firmwareOverride ?? state.defaultFirmwareDirectory;
   const firmwareCandidates = useMemo(
-    () => state.discoveredFirmware.filter((file) => /\.(bin|dfu|fw|img|hex)$/i.test(file.path)),
+    () => state.discoveredFirmware.filter((file) => /\.(bin|fw)$/i.test(file.path)),
     [state.discoveredFirmware]
   );
   useFirmwareOverride(state.firmwareOverride, state.discoveredFirmware, setSelectedFirmware);
   useEffect(() => {
-    if (selectedFirmware && !state.discoveredFirmware.some((file) => file.path === selectedFirmware)) {
+    if (selectedFirmware && !firmwareCandidates.some((file) => file.path === selectedFirmware)) {
       setSelectedFirmware('');
     }
     if (!selectedFirmware && firmwareCandidates.length > 0) {
       setSelectedFirmware(firmwareCandidates[0].path);
     }
-  }, [state.discoveredFirmware, selectedFirmware, firmwareCandidates]);
+  }, [selectedFirmware, firmwareCandidates]);
   const busy = state.busy === 'flash';
   const flashProgress = progress.action === 'flash' ? progress : { action: '', percent: 0, detail: '' };
   return <Card title="串口固件烧录">
-      <Field label="烧录固件"><div className="input-action"><PlaceholderSelect value={selectedFirmware} onChange={(event) => setSelectedFirmware(event.target.value)}><option value="">空白-选项</option>{state.discoveredFirmware.map((file) => <option key={file.path} value={file.path} title={file.path}>{formatFirmwareOption(file)}</option>)}</PlaceholderSelect><div className="inline-actions"><button className="secondary" onClick={() => vscode.postMessage({ type: 'scanFirmware' })}>扫描</button><button className="secondary" onClick={() => vscode.postMessage({ type: 'selectFirmware' })}>选择固件</button></div></div></Field>
+      <Field label="烧录固件"><div className="input-action"><PlaceholderSelect value={selectedFirmware} onChange={(event) => setSelectedFirmware(event.target.value)}><option value="">空白-选项</option>{firmwareCandidates.map((file) => <option key={file.path} value={file.path} title={file.path}>{formatFirmwareOption(file)}</option>)}</PlaceholderSelect><div className="inline-actions"><button className="secondary" onClick={() => vscode.postMessage({ type: 'scanFirmware' })}>扫描</button><button className="secondary" onClick={() => vscode.postMessage({ type: 'selectFirmware' })}>选择固件</button></div></div></Field>
       <Field label="烧录方式"><select value={method} onChange={(e) => setMethod(e.target.value)}>
-        <option value="ota-uart">UART OTA (.bin)</option><option value="fw-uart">UART ADFU (.fw)</option>
+        <option value="auto">自动（按固件类型）</option><option value="ota-uart">UART OTA (.bin)</option><option value="fw-uart">UART ADFU (.fw)</option>
       </select></Field>
-      <div className="columns"><Field label="进入方式"><select value={entry} onChange={(e) => setEntry(e.target.value)}><option value="power-cycle">power-cycle</option><option value="manual">manual</option><option value="shell">shell</option></select></Field><Field label="烧录后校验"><select value={verify} onChange={(e) => setVerify(e.target.value)}><option value="boot">boot</option><option value="enum">enum</option><option value="none">none</option></select></Field></div>
+      <div className="columns"><Field label="进入方式"><select value={entry} onChange={(e) => setEntry(e.target.value)}><option value="power-cycle">power-cycle</option><option value="manual">ADFU</option><option value="shell">shell</option></select></Field><Field label="烧录后校验"><select value={verify} onChange={(e) => setVerify(e.target.value)}><option value="boot">boot</option><option value="enum">enum</option><option value="none">none</option></select></Field></div>
       <div className="columns flash-serial-fields"><Field label="UART 串口"><SerialPortControl value={uart} set={setUart} ports={state.serialPorts} reserved={reservedSerialPorts.includes(uart)} /></Field><Field label="波特率"><BaudSelect value={baud} set={setBaud} /></Field></div>
       <div className="columns"><Field label="超时秒数"><input value={timeout} onChange={(e) => setTimeoutValue(e.target.value)} /></Field><Field label="ADFU VID:PID"><input value={vidPid} onChange={(e) => setVidPid(e.target.value)} /></Field></div>
       <Check label="仅预演，不写设备" checked={dryRun} set={setDryRun} />
@@ -770,7 +792,7 @@ function ToolsPage({ state, notices, reservedSerialPorts, progress }: { state: S
       </div>
     </Card>
     <Card title="全擦除 Flash" subtitle="危险操作：执行前插件会再次弹窗确认">
-      <div className="columns"><Field label="进入方式"><select value={entry} onChange={(e) => setEntry(e.target.value)}><option value="manual">manual</option><option value="shell">shell</option></select></Field><Field label="擦除大小（字节）"><input value={size} onChange={(e) => setSize(e.target.value)} /></Field></div>
+      <div className="columns"><Field label="进入方式"><select value={entry} onChange={(e) => setEntry(e.target.value)}><option value="manual">ADFU</option><option value="shell">shell</option></select></Field><Field label="擦除大小（字节）"><input value={size} onChange={(e) => setSize(e.target.value)} /></Field></div>
       <div className="columns"><Field label="超时秒数"><input value={timeout} onChange={(e) => setTimeoutValue(e.target.value)} /></Field><Field label="ADFU VID:PID"><input value={vidPid} onChange={(e) => setVidPid(e.target.value)} /></Field></div>
       {entry === 'shell' && <><Field label="Shell UART"><SerialPortControl value={shellPort} set={setShellPort} ports={state.serialPorts} emptyLabel="使用设备配置" reserved={reservedSerialPorts.includes(shellPort)} /></Field><div className="columns"><Field label="Shell 波特率"><BaudSelect value={shellBaud} set={setShellBaud} /></Field><Field label="重启命令"><input value={shellCmd} onChange={(e) => setShellCmd(e.target.value)} /></Field></div></>}
       <Check label="仅预演，不擦除" checked={dryRun} set={setDryRun} />

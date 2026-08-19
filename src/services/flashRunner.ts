@@ -1,14 +1,27 @@
 import * as fs from 'node:fs/promises';
 import { ChildProcess, spawn } from 'node:child_process';
 import { BuiltCommand } from './commandBuilder';
+import { assertExecutableVersion } from './toolVersions';
 
 export type FlashProgress = (percent: number, detail: string) => void;
 export type FlashOutput = (text: string) => void;
 
+export interface FlashToolPaths {
+  baton: string;
+  'actions-flash': string;
+}
+
 export class FlashRunner {
   private active?: ChildProcess;
 
-  public async run(cwd: string, command: BuiltCommand, onProgress?: FlashProgress, onOutput?: FlashOutput, operationLabel = '串口烧录'): Promise<void> {
+  public async run(
+    cwd: string,
+    command: BuiltCommand,
+    onProgress?: FlashProgress,
+    onOutput?: FlashOutput,
+    operationLabel = '串口烧录',
+    toolPaths: FlashToolPaths = { baton: 'baton', 'actions-flash': 'actions-flash' }
+  ): Promise<void> {
     if (this.active) {
       throw new Error('已有串口烧录任务正在执行');
     }
@@ -18,9 +31,14 @@ export class FlashRunner {
     }
 
     await this.validateFlashCommand(command);
+    for (const tool of requiredToolsForFlashCommand(command)) {
+      const label = tool === 'baton' ? 'Baton' : 'Actions Flash';
+      await assertExecutableVersion(tool, label, toolPaths[tool]);
+    }
+    const executable = toolPaths[command.executable];
 
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(command.executable, command.args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(executable, command.args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
       this.active = child;
       let outputBuffer = '';
       let pendingLine = '';
@@ -81,6 +99,14 @@ export class FlashRunner {
       throw new Error(`烧录固件无效：${firmware}`);
     }
   }
+}
+
+export function requiredToolsForFlashCommand(command: BuiltCommand): Array<'baton' | 'actions-flash'> {
+  if (command.executable === 'actions-flash') return ['actions-flash'];
+  if (command.executable === 'baton' && ['flash', 'erase-flash'].includes(command.args[0] ?? '')) {
+    return ['baton', 'actions-flash'];
+  }
+  return ['baton'];
 }
 
 export function extractFlashPercentages(output: string): number[] {

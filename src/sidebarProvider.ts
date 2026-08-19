@@ -7,13 +7,20 @@ import { chooseFirmware, discoverFirmware, FirmwareEntry } from './services/firm
 import { HidDfuService } from './services/hidDfu';
 import { ProjectStore, isAriaWorkspace } from './services/projectStore';
 import { TerminalRunner } from './services/terminalRunner';
-import { FlashRunner } from './services/flashRunner';
+import { FlashRunner, FlashToolPaths } from './services/flashRunner';
 import { inspectTools } from './services/tooling';
 import { checkSerialPortAvailability, listSerialPorts, SerialPortReservation } from './services/serialPorts';
 import { listUsbDfuDevices, UsbDfuService } from './services/usbDfu';
 import { IdentityAuthorizationService } from './services/identityAuthorization';
 import { discoverBuildOptions } from './services/buildOptions';
 import { isWebviewDisposedError, WebviewRegistry } from './services/webviewRegistry';
+import {
+  createTemporaryEraseInventory,
+  pulseSerialResetLines,
+  sendShellAdfuCommand,
+  TemporaryEraseInventory,
+  waitForMacAdfuLocation
+} from './services/adfuErase';
 
 export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
@@ -28,6 +35,7 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
   private readonly usbDfu = new UsbDfuService();
   private readonly identity: IdentityAuthorizationService;
   private readonly serialReservation = new SerialPortReservation();
+  private eraseAbort?: AbortController;
   private readonly usbDfuOutput = vscode.window.createOutputChannel('ATS362X USB DFU');
   private readonly flashOutput = vscode.window.createOutputChannel('ATS362X 串口烧录');
 
@@ -261,6 +269,7 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
           this.notice('warning', '正在取消 HID DFU…');
           break;
         case 'eraseAbort':
+          this.eraseAbort?.abort();
           this.flashRunner.cancel();
           this.notice('warning', '正在取消全擦除…');
           break;
@@ -348,7 +357,7 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
           this.flashOutput.appendLine(`${percent.toString().padStart(3, ' ')}% ${detail}`);
         }, (text) => {
           this.flashOutput.append(text);
-        }, '烧录');
+        }, '烧录', this.flashToolPaths());
         this.notice('info', `串口固件烧录命令已完成：${command.executable} ${command.args.join(' ')}`);
       } finally {
         this.state.busy = undefined;
@@ -373,13 +382,17 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
       this.state.busy = 'erase';
       this.post({ type: 'state', state: this.state });
       this.flashOutput.clear();
-      this.flashOutput.appendLine(`命令: ${command.executable} ${command.args.join(' ')}`);
       this.flashOutput.show(true);
       this.post({ type: 'progress', action: 'erase', percent: 0, detail: '准备执行全擦除' });
+      const abort = new AbortController();
+      this.eraseAbort = abort;
+      let temporaryInventory: TemporaryEraseInventory | undefined;
+      let highestProgress = 0;
 
       const appendProgress = (percent: number, detail: string): void => {
-        this.post({ type: 'progress', action: 'erase', percent, detail });
-        this.flashOutput.appendLine(`${percent.toString().padStart(3, ' ')}% ${detail}`);
+        highestProgress = Math.max(highestProgress, percent);
+        this.post({ type: 'progress', action: 'erase', percent: highestProgress, detail });
+        this.flashOutput.appendLine(`${highestProgress.toString().padStart(3, ' ')}% ${detail}`);
       };
       const executeErase = async (
         runRequest: import('./types').RunRequest
@@ -387,55 +400,15 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
         const resolvedCommand = buildCommand(runRequest, undefined);
         this.flashOutput.appendLine(`执行命令: ${resolvedCommand.executable} ${resolvedCommand.args.join(' ')}`);
         let outputBuffer = '';
-        let shellCommandSent = false;
-        let eraseDetected = false;
-        let watchProgress = { percent: 0, detail: '准备执行全擦除' };
-        const outputHasErase = (text: string): boolean =>
-          /native-usb-adfu-erase/i.test(text) || /(?:^|[^\u4e00-\u9fa5\w])(erase|擦除)(?:$|[^\u4e00-\u9fa5\w])/i.test(text);
-        const isAwaitingUsbAdfu = (text: string): boolean => /Waiting for USB ADFU/i.test(text) || /before erase/i.test(text);
-        let shellTimeoutHandle: NodeJS.Timeout | undefined;
-        let shellWatchdogTriggered = false;
-        if (runRequest.options.entry === 'shell' && runRequest.options.dryRun !== true) {
-          shellTimeoutHandle = setTimeout(() => {
-            if (!eraseDetected) {
-              shellWatchdogTriggered = true;
-              this.flashOutput.appendLine('shell 模式长时间未看到擦除阶段输出，已继续等待；如仍无变化可改 manual 重试');
-              appendProgress(Math.max(10, watchProgress.percent), 'shell 重启命令已发送，正在等待 ADFU');
-            }
-          }, 30000);
-        }
-        try {
-          await this.flashRunner.run(cwd, resolvedCommand, (percent, detail) => {
-            watchProgress = { percent, detail };
-            appendProgress(percent, detail);
-            outputBuffer += `${detail}\n`;
-          }, (text) => {
-            outputBuffer += text;
-            this.flashOutput.append(text);
-            if (shellCommandSent && outputHasErase(outputBuffer)) {
-              eraseDetected = true;
-              if (shellTimeoutHandle) {
-                clearTimeout(shellTimeoutHandle);
-                shellTimeoutHandle = undefined;
-              }
-            }
-            if (isAwaitingUsbAdfu(text)) {
-              appendProgress(Math.max(15, watchProgress.percent), '已进入 ADFU 擦除前等待阶段');
-            }
-            if (/Sending runtime shell command/.test(text)) {
-              shellCommandSent = true;
-            }
-          }, '全擦除');
-        } catch (error) {
-          if (shellTimeoutHandle) clearTimeout(shellTimeoutHandle);
-          throw error;
-        }
-        if (shellTimeoutHandle) {
-          clearTimeout(shellTimeoutHandle);
-        }
-        if (shellWatchdogTriggered && !eraseDetected) {
-          this.flashOutput.appendLine('⚠️ 全擦除命令执行结束，但当前输出未检测到擦除动作关键字。');
-        }
+        await this.flashRunner.run(cwd, resolvedCommand, (percent, detail) => {
+          appendProgress(percent, detail);
+          outputBuffer += `${detail}\n`;
+        }, (text) => {
+          outputBuffer += text;
+          this.flashOutput.append(text);
+          if (/SPI erase payload uploaded/i.test(text)) appendProgress(18, '擦除负载已上传');
+          if (/Flash ID:/i.test(text)) appendProgress(20, '已识别 SPI Flash');
+        }, '全擦除', this.flashToolPaths());
         return {
           command: `${resolvedCommand.executable} ${resolvedCommand.args.join(' ')}`,
           output: outputBuffer
@@ -443,36 +416,89 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
       };
 
       try {
-        let result = await executeErase(request);
-        const likelyExecuted = this.hasEraseCommandOutput(result.output);
-        if (!request.options.dryRun && request.options.entry === 'shell' && !likelyExecuted) {
-          const retry = await vscode.window.showWarningMessage(
-            '未检测到明显擦除执行输出，设备可能已在 ADFU。是否改为 manual 模式再试一次？',
-            { modal: true },
-            '改为 manual 重试',
-            '取消'
+        if (request.options.dryRun === true) {
+          const result = await executeErase(request);
+          this.notice('info', `全擦除预演命令已完成：${result.command}`);
+          return;
+        }
+
+        const shellPort = String(request.options.shellPort ?? '').trim();
+        const timeoutSeconds = Number.parseInt(String(request.options.timeout || '120'), 10);
+        const [vidText, pidText] = String(request.options.vidPid || '10d6:10d6').split(':');
+        const vendorId = Number.parseInt(vidText, 16);
+        const productId = Number.parseInt(pidText, 16);
+
+        if (request.options.entry === 'shell') {
+          appendProgress(5, `正在通过 ${shellPort} 发送 Shell 进入命令`);
+          const response = await sendShellAdfuCommand(
+            shellPort,
+            Number.parseInt(String(request.options.shellBaud || '3000000'), 10),
+            String(request.options.shellCmd || 'dbg reboot adfu'),
+            abort.signal
           );
-          if (retry === '改为 manual 重试') {
-            const manualRequest = {
-              ...request,
-              options: {
-                ...request.options,
-                entry: 'manual',
-                shellPort: '',
-                shellBaud: '',
-                shellCmd: ''
-              }
-            };
-            result = await executeErase(manualRequest);
+          if (response.trim()) {
+            this.flashOutput.appendLine('Shell 回显:');
+            this.flashOutput.appendLine(response);
           }
+          appendProgress(10, 'Shell 命令已发送，正在等待 ADFU');
         }
-        const finalHasErase = this.hasEraseCommandOutput(result.output);
-        if (!request.options.dryRun && !finalHasErase) {
-          this.flashOutput.appendLine('⚠️ 提示：未检测到 native-usb-adfu-erase 关键字，建议检查 ADFU VID:PID 与设备状态。');
-          this.notice('warning', '全擦除执行完成，但未检测到明显擦除动作标记，请核对设备是否真正进入 ADFU。');
+
+        let runRequest: import('./types').RunRequest = {
+          ...request,
+          options: {
+            ...request.options,
+            entry: 'manual',
+            shellPort: '',
+            shellBaud: '',
+            shellCmd: ''
+          }
+        };
+
+        if (process.platform === 'darwin') {
+          const location = await waitForMacAdfuLocation(vendorId, productId, timeoutSeconds, abort.signal);
+          appendProgress(15, `已检测到 ADFU，物理槽位 ${location.slotId}`);
+          temporaryInventory = await createTemporaryEraseInventory(location.slotId, shellPort || undefined);
+          runRequest = {
+            ...runRequest,
+            options: {
+              ...runRequest.options,
+              inventory: temporaryInventory.path,
+              device: temporaryInventory.device
+            }
+          };
         }
-        this.notice('info', `全擦除命令已完成：${result.command}`);
+
+        let result: { command: string; output: string };
+        try {
+          result = await executeErase(runRequest);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          const recoverableUsbFailure = /USB error: (?:Input\/Output Error|Pipe error)|READRAM CBW|WRITERAM CBW/i.test(detail);
+          if (!recoverableUsbFailure || !shellPort || process.platform !== 'darwin') throw error;
+          this.flashOutput.appendLine('检测到擦除负载 USB 中断，正在通过串口控制线复位并完整重试一次…');
+          appendProgress(15, 'USB 中断，正在复位到 ADFU 后重试');
+          await pulseSerialResetLines(shellPort, abort.signal);
+          const location = await waitForMacAdfuLocation(vendorId, productId, timeoutSeconds, abort.signal);
+          await temporaryInventory?.dispose();
+          temporaryInventory = await createTemporaryEraseInventory(location.slotId, shellPort);
+          runRequest = {
+            ...runRequest,
+            options: {
+              ...runRequest.options,
+              inventory: temporaryInventory.path,
+              device: temporaryInventory.device
+            }
+          };
+          result = await executeErase(runRequest);
+        }
+
+        if (!this.hasEraseSuccessOutput(result.output)) {
+          throw new Error('全擦除命令退出，但未收到 Flash erase complete 成功标记');
+        }
+        this.notice('info', `全擦除成功：${result.command}`);
       } finally {
+        this.eraseAbort = undefined;
+        await temporaryInventory?.dispose();
         this.state.busy = undefined;
         this.post({ type: 'state', state: this.state });
       }
@@ -505,8 +531,16 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private hasEraseCommandOutput(output: string): boolean {
-    return /native-usb-adfu-erase/i.test(output) || /\b擦除\b/.test(output) || /\berase\b/i.test(output);
+  private flashToolPaths(): FlashToolPaths {
+    const configuration = vscode.workspace.getConfiguration('ats362xBuild');
+    return {
+      baton: configuration.get<string>('batonPath', 'baton'),
+      'actions-flash': configuration.get<string>('actionsFlashPath', 'actions-flash')
+    };
+  }
+
+  private hasEraseSuccessOutput(output: string): boolean {
+    return /Flash erase complete:\s*\d+KB,\s*chip_id=0x[0-9a-f]+,\s*verified\s+3\s+sectors/i.test(output);
   }
 
   /** 对执行请求中的显式串口做最后一次占用检查，探测完成后立即释放。 */

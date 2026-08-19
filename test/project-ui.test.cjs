@@ -55,6 +55,15 @@ test('项目和固件来源独立布局且工具状态移入工具页', () => {
   assert.match(style, /\.project-source-grid \{[^}]*align-items: start;/, '左右两列高度变化必须互不拉伸');
 });
 
+test('插件开头始终说明每个工具的版本要求与检测结果', () => {
+  const style = fs.readFileSync(path.join(__dirname, '..', 'webview', 'src', 'style.css'), 'utf8');
+  assert.match(source, /<ToolRequirements tools=\{state\.tools\} \/>/);
+  assert.match(source, /function ToolRequirements\(/);
+  assert.match(source, /工具版本要求/);
+  assert.match(source, /tool\.minimumVersion/);
+  assert.match(style, /\.tool-requirements \{[^}]*grid-column: 1 \/ -1;/);
+});
+
 test('可输入选择项原位切换自行输入且不增加第二个框', () => {
   assert.match(source, /placeholder = '未选择，请提供选择项'/);
   assert.match(source, /<option value=\{customOption\}>自行输入…<\/option>/);
@@ -85,6 +94,17 @@ test('烧录串口和波特率使用同一水平对齐结构', () => {
   const style = fs.readFileSync(path.join(__dirname, '..', 'webview', 'src', 'style.css'), 'utf8');
   assert.match(source, /className="columns flash-serial-fields"/);
   assert.match(style, /\.flash-serial-fields > \.field \{[^}]*grid-template-rows: 16px auto;/);
+});
+
+test('串口烧录默认自动选择方式且 manual 入口统一显示为 ADFU', () => {
+  const flashPage = source.match(/function FlashPage[\s\S]*?function UsbDfuPage/)?.[0] ?? '';
+  const toolsPage = source.match(/function ToolsPage[\s\S]*?function Card/)?.[0] ?? '';
+  assert.match(flashPage, /useState\('auto'\)/);
+  assert.match(flashPage, /<option value="auto">自动（按固件类型）<\/option>/);
+  assert.match(flashPage, /<option value="manual">ADFU<\/option>/);
+  assert.match(toolsPage, /<option value="manual">ADFU<\/option>/);
+  assert.doesNotMatch(flashPage, />manual<\/option>/);
+  assert.doesNotMatch(toolsPage, />manual<\/option>/);
 });
 
 test('选择内容超出宽度时优先显示末尾', () => {

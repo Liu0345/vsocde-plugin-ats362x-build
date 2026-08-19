@@ -44,6 +44,27 @@ test('full erase is marked destructive unless dry-run is enabled', () => {
   assert.equal(buildCommand({ action: 'erase', options: { dryRun: true } }).destructive, false);
 });
 
+test('串口自动烧录根据固件扩展名选择现有方式', () => {
+  const ota = buildCommand({ action: 'flash', options: { method: 'auto' } }, '/tmp/app_ota.bin');
+  const full = buildCommand({ action: 'flash', options: { method: 'auto' } }, '/tmp/app.fw');
+  assert.deepEqual(ota.args, ['flash', '/tmp/app_ota.bin', '--method', 'ota-uart']);
+  assert.deepEqual(full.args, ['flash', '/tmp/app.fw', '--method', 'fw-uart']);
+  assert.throws(
+    () => buildCommand({ action: 'flash', options: { method: 'auto' } }, '/tmp/app.hex'),
+    /自动烧录仅支持 \.bin 或 \.fw/
+  );
+});
+
+test('全擦除可使用一次性 inventory 和设备别名', () => {
+  const command = buildCommand({
+    action: 'erase',
+    options: { entry: 'manual', inventory: '/tmp/inventory.json', device: '1' }
+  });
+  assert.deepEqual(command.args, [
+    'erase-flash', '--entry', 'manual', '--inventory', '/tmp/inventory.json', '--device', '1'
+  ]);
+});
+
 test('shell quote protects paths and single quotes', () => {
   assert.equal(shellQuote('/tmp/plain.bin'), '/tmp/plain.bin');
   assert.equal(shellQuote('/tmp/a b.bin'), "'/tmp/a b.bin'");

@@ -2,6 +2,19 @@
 
 面向 ARIA workspace / workspace track 的 ATS362X 固件操作面板。插件在 VS Code 集成终端中调用用户本机安装的 `baton`、`actions-flash` 和 `dfu-util`；HID 运行时 DFU 传输层由插件直接实现。
 
+## 工具版本要求
+
+插件打开后会在页面开头显示要求版本和本机检测版本。版本缺失、无法识别或低于要求时，对应状态会标红；串口烧录和全擦除还会在启动命令前再次校验并阻止执行。
+
+| 工具 | 最低版本 | 用途 |
+| --- | --- | --- |
+| Baton | `0.23.0` | 编译、串口烧录、校验、设备诊断与全擦除 |
+| actions-flash | `0.5.0` | Baton 底层固件传输、ADFU 枚举与 `.fw` 解包 |
+| dfu-util | `0.11` | 标准 USB DFU 扫描与烧录 |
+| node-hid | `3.2.0` | HID DFU，已随插件打包 |
+
+`actions-flash` 必须从 [Pawpaw-Technology/actions-flash](https://github.com/Pawpaw-Technology/actions-flash) 官方仓库安装。Baton 报出 `actions-flash >= 0.5.0 is required` 时，说明烧录尚未开始，应先升级该工具。
+
 ## 功能
 
 - 选择、记忆最多 10 个项目目录；最近项目悬停显示完整路径，可逐项关闭记忆或一键清除全部记忆。

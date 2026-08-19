@@ -5,6 +5,8 @@ export interface ToolStatus {
   label: string;
   available: boolean;
   detail: string;
+  minimumVersion: string;
+  detectedVersion?: string;
 }
 
 export interface ProjectState {

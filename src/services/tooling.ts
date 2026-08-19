@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import * as vscode from 'vscode';
 import { ToolStatus } from '../types';
+import { parseToolVersion, readExecutableVersion, satisfiesMinimumVersion, TOOL_REQUIREMENTS } from './toolVersions';
 
 const execFileAsync = promisify(execFile);
 
@@ -28,10 +29,15 @@ export async function inspectTools(): Promise<ToolStatus[]> {
 
   let hidAvailable = false;
   let hidDetail = 'node-hid 未加载';
+  let hidVersion: string | undefined;
   try {
     const module = require('node-hid') as { devices?: () => unknown[] };
-    hidAvailable = typeof module.devices === 'function';
-    hidDetail = hidAvailable ? '已内置' : hidDetail;
+    const packageInfo = require('node-hid/package.json') as { version?: string };
+    hidVersion = packageInfo.version && parseToolVersion(packageInfo.version);
+    hidAvailable = typeof module.devices === 'function' && Boolean(hidVersion) && satisfiesMinimumVersion(hidVersion!, TOOL_REQUIREMENTS['node-hid']);
+    hidDetail = hidVersion
+      ? `已内置 ${hidVersion} · 要求 >= ${TOOL_REQUIREMENTS['node-hid']}`
+      : '已内置，但版本无法识别';
   } catch (error) {
     hidDetail = error instanceof Error ? error.message : String(error);
   }
@@ -40,7 +46,14 @@ export async function inspectTools(): Promise<ToolStatus[]> {
     batonStatus,
     flashStatus,
     dfuStatus,
-    { name: 'node-hid', label: 'HID DFU', available: hidAvailable, detail: hidDetail }
+    {
+      name: 'node-hid',
+      label: 'HID DFU（node-hid）',
+      available: hidAvailable,
+      detail: hidDetail,
+      minimumVersion: TOOL_REQUIREMENTS['node-hid'],
+      detectedVersion: hidVersion
+    }
   ];
 }
 
@@ -49,12 +62,22 @@ async function inspectExecutable(
   label: string,
   executable: string
 ): Promise<ToolStatus> {
+  const minimumVersion = TOOL_REQUIREMENTS[name];
   try {
-    const result = await execFileAsync(executable, ['--version'], { timeout: 3000 });
-    const detail = `${result.stdout}${result.stderr}`.trim().split('\n')[0] || executable;
-    return { name, label, available: true, detail };
+    const result = await readExecutableVersion(executable);
+    const detectedVersion = result.version;
+    const available = Boolean(detectedVersion) && satisfiesMinimumVersion(detectedVersion!, minimumVersion);
+    const detected = detectedVersion ? `已检测 ${detectedVersion}` : '版本无法识别';
+    return {
+      name,
+      label,
+      available,
+      detail: `${detected} · 要求 >= ${minimumVersion}`,
+      minimumVersion,
+      detectedVersion
+    };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    return { name, label, available: false, detail };
+    return { name, label, available: false, detail: `未检测到 · 要求 >= ${minimumVersion} · ${detail}`, minimumVersion };
   }
 }

@@ -1,5 +1,6 @@
 import { RunRequest } from '../types';
 import { buildUsbDfuArgs } from './usbDfu';
+import * as path from 'node:path';
 
 export interface BuiltCommand {
   executable: 'baton' | 'actions-flash' | 'dfu-util';
@@ -33,7 +34,7 @@ export function buildCommand(request: RunRequest, firmware?: string): BuiltComma
     case 'flash': {
       const args = ['flash'];
       if (firmware) args.push(firmware);
-      addOption(args, '--method', value.method);
+      addOption(args, '--method', resolveSerialFlashMethod(value.method, firmware));
       addOption(args, '--entry', value.entry);
       addOption(args, '--verify', value.verify);
       addOption(args, '--board', value.board);
@@ -73,6 +74,8 @@ export function buildCommand(request: RunRequest, firmware?: string): BuiltComma
       addOption(args, '--shell-port', value.shellPort);
       addOption(args, '--shell-baud', value.shellBaud);
       addOption(args, '--shell-cmd', value.shellCmd);
+      addOption(args, '--inventory', value.inventory);
+      addOption(args, '--device', value.device);
       addFlag(args, '--dry-run', value.dryRun);
       return { executable: 'baton', args, destructive: !value.dryRun };
     }
@@ -93,6 +96,15 @@ export function buildCommand(request: RunRequest, firmware?: string): BuiltComma
     default:
       throw new Error(`不支持的操作：${request.action}`);
   }
+}
+
+export function resolveSerialFlashMethod(method: unknown, firmware?: string): string | undefined {
+  if (method !== 'auto') return method === undefined || method === null ? undefined : String(method);
+  if (!firmware) throw new Error('自动烧录需要先选择固件文件');
+  const extension = path.extname(firmware).toLowerCase();
+  if (extension === '.bin') return 'ota-uart';
+  if (extension === '.fw') return 'fw-uart';
+  throw new Error(`自动烧录仅支持 .bin 或 .fw 固件，当前文件为 ${extension || '无扩展名'}`);
 }
 
 function addOption(args: string[], name: string, value: unknown): void {

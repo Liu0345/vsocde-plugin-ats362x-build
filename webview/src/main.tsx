@@ -156,8 +156,8 @@ function App(): JSX.Element {
 
   return <main>
     <nav>
-      <Tab id="project" label="项目" icon="▤" active={page} set={setPage} />
-      <Tab id="build" label="编译/烧录" icon="⚒" active={page} set={setPage} />
+      <Tab id="project" label="项目/编译" icon="▤" active={page} set={setPage} />
+      <Tab id="build" label="烧录固件" icon="⚒" active={page} set={setPage} />
       <Tab id="dfu" label="USB/HID DFU" icon="⇄" active={page} set={setPage} />
       <Tab id="identity" label="身份认证" icon="◇" active={page} set={setPage} />
       <Tab id="tools" label="工具" icon="⚙" active={page} set={setPage} />
@@ -165,10 +165,13 @@ function App(): JSX.Element {
 
     <section className="content">
       <ToolRequirements tools={state.tools} />
-      {page === 'project' && <ProjectPage state={state} />}
-      {page === 'build' && <div className="build-flash-grid">
+      {page === 'project' && <div className="project-build-grid">
+        <ProjectPage state={state} />
         <BuildPage state={state} disabled={!state.projectPath} projectPath={state.projectPath} />
+      </div>}
+      {page === 'build' && <div className="flash-relay-grid">
         <FlashPage state={state} reservedSerialPorts={reservedSerialPorts} progress={progress} />
+        <RelayCard state={state} />
       </div>}
       {page === 'dfu' && (
         <DfuPage
@@ -208,8 +211,7 @@ function ToolRequirements({ tools }: { tools: Tool[] }): JSX.Element {
 }
 
 function ProjectPage({ state }: { state: State }): JSX.Element {
-  return <div className="project-source-grid">
-    <Card title="项目目录" subtitle="支持 ARIA workspace 与隔离 workspace track">
+  return <Card title="项目目录" subtitle="支持 ARIA workspace 与隔离 workspace track">
       <PathValue label="当前项目" value={state.projectPath} empty="未选择" />
       <div className="button-row">
         <button onClick={() => vscode.postMessage({ type: 'selectProject' })}>选择项目目录</button>
@@ -230,24 +232,6 @@ function ProjectPage({ state }: { state: State }): JSX.Element {
           >×</button>
         </div>)}
       </div>}
-    </Card>
-    <FirmwareCard state={state} />
-  </div>;
-}
-
-function FirmwareCard({ state }: { state: State }): JSX.Element {
-  return <Card title="固件来源" subtitle="未设置覆盖路径时，自动使用项目最新的 _firmware 目录">
-    <div className="source-pill">{state.firmwareOverride ? '自定义' : '默认（自动）'}</div>
-    <PathValue label={state.firmwareOverride ? '覆盖路径' : '默认固件目录'} value={state.firmwareOverride ?? state.defaultFirmwareDirectory} empty="构建后自动发现" />
-    <div className="button-row wrap">
-      <button className="secondary" onClick={() => vscode.postMessage({ type: 'scanFirmware' })}>扫描固件</button>
-      <button className="secondary" onClick={() => vscode.postMessage({ type: 'selectFirmware' })}>选择固件</button>
-      <button className="secondary" onClick={() => vscode.postMessage({ type: 'selectFirmwareDirectory' })}>选择目录</button>
-      {state.firmwareOverride && <button className="ghost" onClick={() => vscode.postMessage({ type: 'clearFirmwareOverride' })}>恢复默认</button>}
-    </div>
-    {state.discoveredFirmware.length > 0 && <details><summary>已发现 {state.discoveredFirmware.length} 个固件</summary>
-      <div className="file-list">{state.discoveredFirmware.map((file) => <code key={file.path} title={file.path}>{formatFirmwareOption(file)}</code>)}</div>
-    </details>}
   </Card>;
 }
 
@@ -784,6 +768,48 @@ function CommandField({ label, value, set }: { label: string; value: string; set
   return <Field label={label}><input spellCheck={false} value={value} onChange={(event) => set(event.target.value)} /></Field>;
 }
 
+function RelayCard({ state }: { state: State }): JSX.Element {
+  const relayPath = state.relaySelectedPath ?? '';
+  const relayDevice = state.relayDevices.find((device) => device.path === relayPath);
+  const relayMaskKnown = typeof state.relayMask === 'number';
+  return <Card title="USB HID 继电器" subtitle="自动扫描 VID:PID 16C0:05DF；扫描和选择不会打开 HID 接口">
+    <div className="input-action">
+      <PlaceholderSelect
+        value={relayPath}
+        selectedLabel={relayDevice ? relayDeviceLabel(relayDevice) : undefined}
+        preferTail={false}
+        disabled={Boolean(state.relayBusy)}
+        onChange={(event) => vscode.postMessage({ type: 'selectRelay', path: event.target.value })}
+      >
+        <option value="">空白-选项</option>
+        {state.relayDevices.map((device) => <option key={device.path} value={device.path}>{relayDeviceLabel(device)}</option>)}
+      </PlaceholderSelect>
+      <div className="inline-actions">
+        <button className="secondary" disabled={Boolean(state.relayBusy)} onClick={() => vscode.postMessage({ type: 'listRelays' })}>扫描</button>
+        <button className="secondary" disabled={!relayPath || Boolean(state.relayBusy)} onClick={() => vscode.postMessage({ type: 'relayRead', path: relayPath })}>读取状态</button>
+      </div>
+    </div>
+    <div className="relay-status">
+      <span>{state.relayDevices.length > 0 ? `发现 ${state.relayDevices.length} 个继电器，已自动选择可用设备` : '未发现继电器'}</span>
+      <code>{relayMaskKnown ? `状态 0x${state.relayMask!.toString(16).padStart(2, '0').toUpperCase()}` : '状态未读取'}</code>
+    </div>
+    <div className="relay-channel-grid">
+      {Array.from({ length: 8 }, (_, index) => {
+        const channel = index + 1;
+        const checked = relayMaskKnown && Boolean(state.relayMask! & (1 << index));
+        return <Check
+          key={channel}
+          label={`CH${channel}`}
+          checked={checked}
+          disabled={!relayPath || Boolean(state.relayBusy)}
+          set={(enabled) => vscode.postMessage({ type: 'relayChannel', path: relayPath, channel, enabled })}
+        />;
+      })}
+    </div>
+    <div className="callout relay-callout">勾选对应 CH 即开启，再次点击取消勾选即关闭。每次操作仅临时占用 HID：先读取完整位图，只修改目标通道并复核其余通道不变，随后立即释放接口。</div>
+  </Card>;
+}
+
 function ToolsPage({ state, notices, reservedSerialPorts, progress }: { state: State; notices: Notice[]; reservedSerialPorts: string[]; progress: TransferProgress }): JSX.Element {
   const [entry, setEntry] = useState('shell');
   const [size, setSize] = useState('8388608');
@@ -796,9 +822,6 @@ function ToolsPage({ state, notices, reservedSerialPorts, progress }: { state: S
   const busy = Boolean(state.busy);
   const eraseProgress = progress.action === 'erase' ? progress : { action: '', percent: 0, detail: '' };
   const erasing = state.busy === 'erase';
-  const relayPath = state.relaySelectedPath ?? '';
-  const relayDevice = state.relayDevices.find((device) => device.path === relayPath);
-  const relayMaskKnown = typeof state.relayMask === 'number';
   return <>
     <Card title="工具状态" subtitle="插件调用现有 Baton / Actions Flash，并内置 HID 传输层">
       <div className="tool-grid">{state.tools.map((tool) => <div className="tool" key={tool.name}>
@@ -815,42 +838,6 @@ function ToolsPage({ state, notices, reservedSerialPorts, progress }: { state: S
         <button className="secondary" disabled={!state.projectPath} onClick={() => run('listAdfu', {})}>列出 ADFU</button>
         <button className="secondary" disabled={!state.projectPath} onClick={() => run('extractFw', {})}>解包 .fw</button>
       </div>
-    </Card>
-    <Card title="USB HID 继电器" subtitle="自动扫描 VID:PID 16C0:05DF；扫描和选择不会打开 HID 接口">
-      <div className="input-action">
-        <PlaceholderSelect
-          value={relayPath}
-          selectedLabel={relayDevice ? relayDeviceLabel(relayDevice) : undefined}
-          preferTail={false}
-          disabled={Boolean(state.relayBusy)}
-          onChange={(event) => vscode.postMessage({ type: 'selectRelay', path: event.target.value })}
-        >
-          <option value="">空白-选项</option>
-          {state.relayDevices.map((device) => <option key={device.path} value={device.path}>{relayDeviceLabel(device)}</option>)}
-        </PlaceholderSelect>
-        <div className="inline-actions">
-          <button className="secondary" disabled={Boolean(state.relayBusy)} onClick={() => vscode.postMessage({ type: 'listRelays' })}>扫描</button>
-          <button className="secondary" disabled={!relayPath || Boolean(state.relayBusy)} onClick={() => vscode.postMessage({ type: 'relayRead', path: relayPath })}>读取状态</button>
-        </div>
-      </div>
-      <div className="relay-status">
-        <span>{state.relayDevices.length > 0 ? `发现 ${state.relayDevices.length} 个继电器，已自动选择可用设备` : '未发现继电器'}</span>
-        <code>{relayMaskKnown ? `状态 0x${state.relayMask!.toString(16).padStart(2, '0').toUpperCase()}` : '状态未读取'}</code>
-      </div>
-      <div className="relay-channel-grid">
-        {Array.from({ length: 8 }, (_, index) => {
-          const channel = index + 1;
-          const checked = relayMaskKnown && Boolean(state.relayMask! & (1 << index));
-          return <Check
-            key={channel}
-            label={`CH${channel}`}
-            checked={checked}
-            disabled={!relayPath || Boolean(state.relayBusy)}
-            set={(enabled) => vscode.postMessage({ type: 'relayChannel', path: relayPath, channel, enabled })}
-          />;
-        })}
-      </div>
-      <div className="callout relay-callout">勾选对应 CH 即开启，再次点击取消勾选即关闭。每次操作仅临时占用 HID：先读取完整位图，只修改目标通道并复核其余通道不变，随后立即释放接口。</div>
     </Card>
     <Card title="全擦除 Flash" subtitle="危险操作：执行前插件会再次弹窗确认">
       <div className="columns"><Field label="进入方式"><select value={entry} onChange={(e) => setEntry(e.target.value)}><option value="manual">ADFU</option><option value="shell">shell</option></select></Field><Field label="擦除大小（字节）"><input value={size} onChange={(e) => setSize(e.target.value)} /></Field></div>

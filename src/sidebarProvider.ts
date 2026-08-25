@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { ExtensionToWebview, ProjectState, RunRequest, WebviewToExtension } from './types';
+import { ExtensionToWebview, ProjectState, RelayDeviceInfo, RunRequest, WebviewToExtension } from './types';
 import { buildCommand } from './services/commandBuilder';
 import { chooseFirmware, discoverFirmware, FirmwareEntry } from './services/firmwareLocator';
 import { HidDfuService } from './services/hidDfu';
@@ -14,7 +14,7 @@ import { listUsbDfuDevices, UsbDfuService } from './services/usbDfu';
 import { IdentityAuthorizationService } from './services/identityAuthorization';
 import { discoverBuildOptions } from './services/buildOptions';
 import { isWebviewDisposedError, WebviewRegistry } from './services/webviewRegistry';
-import { RelayController } from './services/relayController';
+import { RelayController, resolveRelayDevice } from './services/relayController';
 import {
   createTemporaryEraseInventory,
   pulseSerialResetLines,
@@ -365,11 +365,11 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async readRelayState(devicePath: string): Promise<void> {
-    this.assertRelayReady(devicePath);
+    const device = this.refreshRelayForAction(devicePath);
     this.state.relayBusy = true;
     this.post({ type: 'state', state: this.state });
     try {
-      const mask = await this.relay.readState(devicePath);
+      const mask = await this.relay.readState(device.path);
       this.state.relayMask = mask;
       this.notice('info', `继电器状态读取完成：0x${formatRelayMask(mask)}；HID 接口已释放`);
     } finally {
@@ -379,11 +379,11 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async setRelayChannel(devicePath: string, channel: number, enabled: boolean): Promise<void> {
-    this.assertRelayReady(devicePath);
+    const device = this.refreshRelayForAction(devicePath);
     this.state.relayBusy = true;
     this.post({ type: 'state', state: this.state });
     try {
-      const result = await this.relay.setChannel(devicePath, channel, enabled);
+      const result = await this.relay.setChannel(device.path, channel, enabled);
       this.state.relayMask = result.after;
       this.notice(
         'info',
@@ -395,11 +395,22 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private assertRelayReady(devicePath: string): void {
+  /** 每次动作前重新枚举，并把页面缓存的设备身份解析到最新 HID path。 */
+  private refreshRelayForAction(devicePath: string): RelayDeviceInfo {
     if (this.state.relayBusy) throw new Error('已有继电器操作正在执行');
-    if (!devicePath || !this.state.relayDevices.some((device) => device.path === devicePath)) {
+    if (!devicePath) {
       throw new Error('请先扫描并选择 USB HID 继电器');
     }
+    const previous = this.state.relayDevices.find((device) => device.path === devicePath)
+      ?? this.state.relayDevices.find((device) => device.path === this.state.relaySelectedPath);
+    const devices = this.relay.list();
+    const selected = resolveRelayDevice(previous, devices);
+    const pathChanged = selected.path !== this.state.relaySelectedPath;
+    this.state.relayDevices = devices;
+    this.state.relaySelectedPath = selected.path;
+    if (pathChanged) this.state.relayMask = undefined;
+    this.post({ type: 'state', state: this.state });
+    return selected;
   }
 
   private async selectFirmware(directory: boolean, extensions = ['bin', 'dfu', 'fw', 'img', 'hex']): Promise<void> {

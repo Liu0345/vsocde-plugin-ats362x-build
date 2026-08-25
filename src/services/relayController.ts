@@ -92,7 +92,20 @@ export class RelayController {
     this.operationActive = true;
     let device: RelayHidHandle | undefined;
     try {
-      device = new (this.loadHid().HID)(devicePath);
+      let openError: unknown;
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          device = new (this.loadHid().HID)(devicePath);
+          break;
+        } catch (error) {
+          openError = error;
+          if (attempt < 3) await this.wait(120);
+        }
+      }
+      if (!device) {
+        const detail = openError instanceof Error ? openError.message : String(openError);
+        throw new Error(`无法打开 USB HID 继电器：${detail}`);
+      }
       device.sendFeatureReport([...RELAY_INIT_REPORT]);
       // 0xD2 初始化后必须读取一次 feature report 才能稳定驱动继电器。
       this.readMask(device);
@@ -114,6 +127,33 @@ export class RelayController {
     }
     return Number(report[7]) & 0xff;
   }
+}
+
+/**
+ * 用每次动作前的最新枚举结果重新定位设备，避免继续使用重枚举前的旧 HID path。
+ * 多设备场景优先使用完整 path，其次使用唯一序列号，再使用唯一设备身份。
+ */
+export function resolveRelayDevice(selected: RelayDeviceInfo | undefined, devices: RelayDeviceInfo[]): RelayDeviceInfo {
+  if (devices.length === 0) throw new Error('未发现 USB HID 继电器');
+  if (!selected) return devices[0];
+
+  const exactPath = devices.find((device) => device.path === selected.path);
+  if (exactPath) return exactPath;
+
+  if (selected.serialNumber) {
+    const serialMatches = devices.filter((device) => device.serialNumber === selected.serialNumber);
+    if (serialMatches.length === 1) return serialMatches[0];
+  }
+
+  const identityMatches = devices.filter((device) =>
+    device.vendorId === selected.vendorId &&
+    device.productId === selected.productId &&
+    device.product === selected.product &&
+    device.manufacturer === selected.manufacturer
+  );
+  if (identityMatches.length === 1) return identityMatches[0];
+  if (devices.length === 1) return devices[0];
+  throw new Error('原继电器路径已变化且无法唯一识别，请重新选择继电器');
 }
 
 function loadNodeHid(): RelayHidModule {

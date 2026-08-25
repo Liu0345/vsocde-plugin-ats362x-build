@@ -11,7 +11,7 @@ export class ProjectStore {
   public constructor(private readonly context: vscode.ExtensionContext) {}
 
   public get selectedProject(): string | undefined {
-    return this.context.globalState.get<string>(SELECTED_PROJECT);
+    return this.context.workspaceState.get<string>(SELECTED_PROJECT);
   }
 
   public get recentProjects(): string[] {
@@ -19,7 +19,7 @@ export class ProjectStore {
   }
 
   public get firmwareOverride(): string | undefined {
-    return this.context.globalState.get<string>(FIRMWARE_OVERRIDE);
+    return this.context.workspaceState.get<string>(FIRMWARE_OVERRIDE);
   }
 
   public async initialize(): Promise<void> {
@@ -37,19 +37,19 @@ export class ProjectStore {
 
   public async selectProject(projectPath: string): Promise<void> {
     const normalized = path.resolve(projectPath);
-    await this.context.globalState.update(SELECTED_PROJECT, normalized);
+    await this.context.workspaceState.update(SELECTED_PROJECT, normalized);
     const existing = this.recentProjects;
     const recent = existing.some((item) => path.resolve(item) === normalized)
       ? existing
       : [normalized, ...existing].slice(0, MAX_RECENT);
     await this.context.globalState.update(RECENT_PROJECTS, recent);
-    await this.context.globalState.update(FIRMWARE_OVERRIDE, undefined);
+    await this.context.workspaceState.update(FIRMWARE_OVERRIDE, undefined);
   }
 
   public async clearProjects(): Promise<void> {
-    await this.context.globalState.update(SELECTED_PROJECT, undefined);
+    await this.context.workspaceState.update(SELECTED_PROJECT, undefined);
     await this.context.globalState.update(RECENT_PROJECTS, []);
-    await this.context.globalState.update(FIRMWARE_OVERRIDE, undefined);
+    await this.context.workspaceState.update(FIRMWARE_OVERRIDE, undefined);
   }
 
   /** 只移除指定项目的记忆；若它正被选中，同时清除当前选择和固件覆盖。 */
@@ -60,13 +60,13 @@ export class ProjectStore {
       this.recentProjects.filter((item) => path.resolve(item) !== normalized)
     );
     if (this.selectedProject && path.resolve(this.selectedProject) === normalized) {
-      await this.context.globalState.update(SELECTED_PROJECT, undefined);
-      await this.context.globalState.update(FIRMWARE_OVERRIDE, undefined);
+      await this.context.workspaceState.update(SELECTED_PROJECT, undefined);
+      await this.context.workspaceState.update(FIRMWARE_OVERRIDE, undefined);
     }
   }
 
   public async setFirmwareOverride(value?: string): Promise<void> {
-    await this.context.globalState.update(FIRMWARE_OVERRIDE, value ? path.resolve(value) : undefined);
+    await this.context.workspaceState.update(FIRMWARE_OVERRIDE, value ? path.resolve(value) : undefined);
   }
 }
 

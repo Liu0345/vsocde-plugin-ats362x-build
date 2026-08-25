@@ -20,6 +20,16 @@ test('点击已记忆项目不改变最近项目顺序', () => {
   assert.doesNotMatch(store, /\[normalized, \.\.\.this\.recentProjects\.filter/);
 });
 
+test('当前项目和固件覆盖按 VS Code 窗口隔离', () => {
+  const store = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'projectStore.ts'), 'utf8');
+  assert.match(store, /workspaceState\.get<string>\(SELECTED_PROJECT\)/);
+  assert.match(store, /workspaceState\.get<string>\(FIRMWARE_OVERRIDE\)/);
+  assert.match(store, /workspaceState\.update\(SELECTED_PROJECT/);
+  assert.match(store, /workspaceState\.update\(FIRMWARE_OVERRIDE/);
+  assert.match(store, /globalState\.get<string\[]>\(RECENT_PROJECTS/);
+  assert.doesNotMatch(store, /globalState\.get<string>\(SELECTED_PROJECT\)/);
+});
+
 test('扫描类选择保留空选项且固件入口使用统一名称', () => {
   assert.match(source, /function SerialPortSelect\([^\n]+emptyLabel = '未选择，请提供选择项'/);
   assert.match(source, /function PlaceholderSelect\(/);
@@ -34,37 +44,44 @@ test('扫描类选择保留空选项且固件入口使用统一名称', () => {
   assert.match(style, /\.select-display \{[^}]*right: 24px;/, '显示层应贴近下拉箭头，避免尾部右侧出现过大空白');
 });
 
-test('编译与烧录合并并移除重复固件来源卡片', () => {
-  assert.match(source, /<Tab id="build" label="编译\/烧录"/);
-  assert.doesNotMatch(source, /<Tab id="flash"/);
-  assert.match(source, /page === 'build'[\s\S]*?className="build-flash-grid"[\s\S]*?<BuildPage[\s\S]*?<FlashPage/);
+test('项目与固件编译同页，烧录固件与继电器同页', () => {
+  assert.match(source, /<Tab id="project" label="项目\/编译"/);
+  assert.match(source, /<Tab id="build" label="烧录固件"/);
+  assert.match(source, /page === 'project'[\s\S]*?className="project-build-grid"[\s\S]*?<ProjectPage[\s\S]*?<BuildPage/);
+  assert.match(source, /page === 'build'[\s\S]*?className="flash-relay-grid"[\s\S]*?<FlashPage[\s\S]*?<RelayCard/);
   const buildPage = source.match(/function BuildPage[\s\S]*?function EditableBuildOption/)?.[0] ?? '';
   const flashPage = source.match(/function FlashPage[\s\S]*?function UsbDfuPage/)?.[0] ?? '';
+  const projectPage = source.match(/function ProjectPage[\s\S]*?function BuildPage/)?.[0] ?? '';
+  assert.match(buildPage, /title="固件编译"/);
+  assert.doesNotMatch(projectPage, /固件来源/, '项目区域不应再显示固件来源卡片');
   assert.doesNotMatch(buildPage, /当前固件来源/, '固件编译卡片不应显示当前固件来源');
   assert.match(flashPage, /'开始烧录'\}<\/button>[\s\S]*?<div className="flash-firmware-source"><PathValue label="当前固件来源"/, '当前固件来源应位于串口烧录卡片最底部');
   assert.doesNotMatch(flashPage, /仅负责 UART OTA \/ UART ADFU/, '串口烧录卡片不需要额外说明');
 });
 
-test('项目和固件来源独立布局且工具状态移入工具页', () => {
+test('项目与编译独立布局且工具状态保留在工具页', () => {
   const style = fs.readFileSync(path.join(__dirname, '..', 'webview', 'src', 'style.css'), 'utf8');
-  const projectPage = source.match(/function ProjectPage[\s\S]*?function FirmwareCard/)?.[0] ?? '';
+  const projectPage = source.match(/function ProjectPage[\s\S]*?function BuildPage/)?.[0] ?? '';
   const toolsPage = source.match(/function ToolsPage[\s\S]*?function Card/)?.[0] ?? '';
-  assert.match(projectPage, /className="project-source-grid"/);
   assert.doesNotMatch(projectPage, /title="工具状态"/);
   assert.match(toolsPage, /title="工具状态"/);
-  assert.match(style, /\.project-source-grid \{[^}]*align-items: start;/, '左右两列高度变化必须互不拉伸');
+  assert.match(style, /\.project-build-grid \{[^}]*align-items: start;/, '项目与固件编译两列高度变化必须互不拉伸');
 });
 
-test('工具页继电器默认扫描，CH1～CH8 每次勾选动作临时占用 HID', () => {
+test('烧录固件页继电器默认扫描，工具页不再显示继电器', () => {
   const toolsPage = source.match(/function ToolsPage[\s\S]*?function Card/)?.[0] ?? '';
+  const relayCard = source.match(/function RelayCard[\s\S]*?function ToolsPage/)?.[0] ?? '';
   const provider = fs.readFileSync(path.join(__dirname, '..', 'src', 'sidebarProvider.ts'), 'utf8');
-  assert.match(toolsPage, /title="USB HID 继电器"/);
-  assert.match(toolsPage, /state\.relayDevices\.map/);
-  assert.match(toolsPage, /Array\.from\(\{ length: 8 \}/);
-  assert.match(toolsPage, /type: 'relayChannel'/);
-  assert.match(toolsPage, /每次操作仅临时占用 HID/);
+  assert.doesNotMatch(toolsPage, /title="USB HID 继电器"/);
+  assert.match(relayCard, /title="USB HID 继电器"/);
+  assert.match(relayCard, /state\.relayDevices\.map/);
+  assert.match(relayCard, /Array\.from\(\{ length: 8 \}/);
+  assert.match(relayCard, /type: 'relayChannel'/);
+  assert.match(relayCard, /每次操作仅临时占用 HID/);
   assert.match(provider, /case 'ready':[\s\S]*?this\.refresh\(\)/);
   assert.match(provider, /case 'relayChannel'/);
+  assert.match(provider, /readRelayState[\s\S]*?refreshRelayForAction/);
+  assert.match(provider, /setRelayChannel[\s\S]*?refreshRelayForAction/);
 });
 
 test('插件开头始终说明每个工具的版本要求与检测结果', () => {

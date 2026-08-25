@@ -80,8 +80,8 @@ select.select-empty option { color: var(--vscode-dropdown-foreground, var(--vsco
 .select-display > span { flex: 0 0 auto; white-space: nowrap; }
 .select-display.show-tail > span { max-width: none; overflow: visible; text-overflow: clip; }
 .columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
-.project-source-grid { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 10px; min-width: 0; }
-.build-flash-grid { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; gap: 10px; min-width: 0; }
+.project-build-grid { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 10px; min-width: 0; }
+.flash-relay-grid { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 10px; min-width: 0; }
 .checks { display: grid; grid-template-columns: 1fr 1fr; column-gap: 14px; row-gap: 6px; margin: 2px 0 10px; }
 .check { display: flex; min-height: 18px; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; line-height: 1.3; }
 .check input { flex: 0 0 auto; width: 14px; height: 14px; margin: 0; padding: 0; accent-color: var(--accent); }
@@ -208,12 +208,12 @@ details { margin-top: 10px; color: var(--muted); font-size: 12px; }
   .identity-connection-grid, .identity-auth-grid { grid-template-columns: minmax(0, 1fr); }
   .identity-connect-fields, .identity-account-fields { grid-template-columns: minmax(0, 1fr); }
   .identity-connection-grid { gap: 12px; }
-  .project-source-grid { grid-template-columns: minmax(0, 1fr); }
+  .project-build-grid { grid-template-columns: minmax(0, 1fr); }
   .relay-channel-grid { grid-template-columns: repeat(4, minmax(42px, 1fr)); }
 }
 @media (max-width: 330px) {
   .relay-channel-grid { grid-template-columns: repeat(2, minmax(42px, 1fr)); }
 }
 @media (min-width: 820px) {
-  .build-flash-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .flash-relay-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

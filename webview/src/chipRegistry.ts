@@ -22,6 +22,8 @@ export interface ChipDefinition {
   modules: ChipModule[];
   defaultModule: string;
   source: string[];
+  sourceSha256: Record<string, string>;
+  sourcePolicy: string;
   defaults: { category: string; instance: string };
   pins: ChipPin[];
 }
@@ -52,6 +54,8 @@ interface RawChipDefinition {
   modules: RawChipModule[];
   defaultModule: string;
   source: string[];
+  sourceSha256: Record<string, string>;
+  sourcePolicy: string;
   defaults: { category: string; instance: string };
   pins: Array<[string, string, string, Array<[string, string, string]>]>;
 }

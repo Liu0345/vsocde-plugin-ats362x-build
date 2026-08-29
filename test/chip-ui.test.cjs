@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
@@ -152,10 +153,34 @@ test('引脚功能与 MFP 数据完整且保留关联关系', () => {
   assert.equal(data.pins.length, 139);
   const gpioPins = data.pins.filter((pin) => /^GPIO\d+$/.test(pin[1]));
   assert.equal(gpioPins.length, 55);
-  const entries = gpioPins.flatMap((pin) => pin[3].map((fn) => [pin[0], pin[1], ...fn]));
-  assert.ok(entries.length > 1000);
+  const gpioAndWioPins = data.pins.filter((pin) => /^(?:GPIO|WIO)\d+$/.test(pin[1]));
+  assert.equal(gpioAndWioPins.length, 59);
+  const entries = data.pins.flatMap((pin) => pin[3].map((fn) => [pin[0], pin[1], ...fn]));
+  assert.equal(entries.length, 1040);
   const keys = entries.map((item) => `${item[0]}:${item[2]}:${item[3]}`);
   assert.equal(new Set(keys).size, keys.length, '同一球位、功能、MFP 不应重复');
+  assert.equal(new Set(data.pins.map((pin) => pin[0])).size, 139, 'BGA 球位不应重复');
+  assert.equal(entries.some((item) => item[2] === '*'), false, 'Analog 星号是占位符，不能作为功能导入');
+  const validMfpValues = new Set(['0x0', '0x2', '0x3', '0x4', '0x5', '0x6', '0x7', '0x8', '0x9', '0xa', '0xb', '0xc', '0xd', '0x2b', '0x2c', '0xe', '0xf', '0x10', '0x11', '0x12', '0x13', '0x14', '0x15', '0x16', '0x17', '0x18', '0x19', '0x1a', '0x1b', '0x1c', '0x1d', '0x1e', '0x1f', '0x20', '0x21', '0x22', '0x23', '0x24', '0x25', '0x26', '0x27', '0x28', 'JTAG', 'Analog']);
+  assert.deepEqual([...new Set(entries.map((item) => item[3]))].filter((mfp) => !validMfpValues.has(mfp)), [], 'MFP 必须来自源表表头');
+  assert.deepEqual(data.sourceSha256, {
+    'ATS362X_PIN_Define.xlsx': '170a9f0ac738b11bc753bfb290b624c3c9803a2495083cebf4ac293ef233aa5c',
+    'ATS3625N -pin分配基本表格.xlsx': 'a27a3e3e13705076a22f9a8a9991f9cb3f7b4ad054bb0cde6a26262f0db60481'
+  });
+  assert.match(data.sourcePolicy, /ATS3625（N） PIN Define 为权威/);
+  const categoryRules = [
+    [/^(?:GPIO|WIO)\d+$/, 'GPIO'], [/^I2S/, 'I2S'], [/^I2C/, 'I2C'], [/^SPI/, 'SPI'], [/^UART/, 'UART'],
+    [/^DMIC/, 'DMIC'], [/^PWM/, 'PWM'], [/^TIMER/, 'TIMER'], [/^LRADC/, 'LRADC'], [/^SD\d/, 'SD'],
+    [/^SPDIF/, 'SPDIF'], [/^LCD/, 'LCD'], [/^CEC/, 'CEC'], [/^IRC/, 'IRC'],
+    [/^(?:HOSC|LOSC|RC\d+K|VRBGR)/, 'CLOCK'], [/^(?:SWCLK|SWIO)/, 'JTAG']
+  ];
+  const categoryMismatches = entries.flatMap((item) => {
+    const expected = categoryRules.find(([pattern]) => pattern.test(item[2]))?.[1];
+    return expected && expected !== item[4] ? [{ ball: item[0], function: item[2], expected, actual: item[4] }] : [];
+  });
+  assert.deepEqual(categoryMismatches, [], '基础 JSON 中的功能分类必须与功能名称一致，不能依赖运行时纠正');
+  assert.equal(crypto.createHash('sha256').update(JSON.stringify(data.pins)).digest('hex'), '3e1179fc0df3fc63f13b512ead34d01fcbd1ca4a6b9b78d8fb6ffae20ff3bb8e', '基础 PIN、功能和 MFP 数据必须保持与已审计源表一致');
+  assert.equal(crypto.createHash('sha256').update(JSON.stringify(data.modules)).digest('hex'), '8b82daf5575e3e86f4d1af7fb367bd7cc6ccb71cdb28df4666a6bd216c47e22f', 'PRO-INTERFACE-M1 模组引脚定义不得被意外改写');
   assert.ok(entries.some((item) => item[1] === 'GPIO64' && item[2] === 'I2SG0_LRCLK' && item[3] === '0x14' && item[4] === 'I2S'));
   assert.match(page, /MFP \{fn\.mfp\}/);
   assert.match(page, /<code>\{fn\.mfp\}<\/code>/);

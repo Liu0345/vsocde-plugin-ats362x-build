@@ -104,6 +104,11 @@
     "ATS362X_PIN_Define.xlsx / ATS3625（N） PIN Define",
     "ATS3625N -pin分配基本表格.xlsx / Pad_Assignment_Func + 封装"
   ],
+  "sourceSha256": {
+    "ATS362X_PIN_Define.xlsx": "170a9f0ac738b11bc753bfb290b624c3c9803a2495083cebf4ac293ef233aa5c",
+    "ATS3625N -pin分配基本表格.xlsx": "a27a3e3e13705076a22f9a8a9991f9cb3f7b4ad054bb0cde6a26262f0db60481"
+  },
+  "sourcePolicy": "PIN、功能与 MFP 以 ATS3625（N） PIN Define 为权威；Pad_Assignment_Func 与封装仅用于交叉校验。",
   "defaults": {
     "category": "I2S",
     "instance": "I2SG0"
@@ -245,12 +250,12 @@
         [
           "RC32K_SVCC",
           "0x4",
-          "SPI"
+          "CLOCK"
         ],
         [
           "LOSCOUT",
           "0x6",
-          "UART"
+          "CLOCK"
         ],
         [
           "LOSCO",
@@ -277,22 +282,22 @@
         [
           "LRADC1",
           "0x3",
-          "SPI"
+          "LRADC"
         ],
         [
           "RC32K_SVCC",
           "0x4",
-          "SPI"
+          "CLOCK"
         ],
         [
           "VRBGR",
           "0x5",
-          "SPI"
+          "CLOCK"
         ],
         [
           "LOSCOUT",
           "0x6",
-          "UART"
+          "CLOCK"
         ]
       ]
     ],
@@ -541,7 +546,7 @@
         [
           "LOSCOUT",
           "0x24",
-          "UART"
+          "CLOCK"
         ],
         [
           "I2SG2_LRCLK",
@@ -750,7 +755,7 @@
         [
           "LOSCOUT",
           "0x24",
-          "UART"
+          "CLOCK"
         ],
         [
           "I2SG2_MCLK",
@@ -1874,7 +1879,7 @@
         [
           "LOSCOUT",
           "0x24",
-          "UART"
+          "CLOCK"
         ],
         [
           "I2SG0_MCLK",
@@ -2758,7 +2763,7 @@
         [
           "LOSCOUT",
           "0x24",
-          "UART"
+          "CLOCK"
         ],
         [
           "I2SG3_BCLK",
@@ -3283,7 +3288,7 @@
         [
           "LOSCOUT",
           "0x24",
-          "UART"
+          "CLOCK"
         ],
         [
           "I2SG3_LRCLK",
@@ -3982,7 +3987,7 @@
         [
           "LOSCOUT",
           "0x24",
-          "UART"
+          "CLOCK"
         ]
       ]
     ],
@@ -4806,7 +4811,7 @@
         [
           "LOSCOUT",
           "0x24",
-          "UART"
+          "CLOCK"
         ],
         [
           "SPDIFRX",
@@ -4948,7 +4953,7 @@
         [
           "LOSCOUT",
           "0x24",
-          "UART"
+          "CLOCK"
         ],
         [
           "I2S5_DO0",
@@ -5551,7 +5556,7 @@
         [
           "LOSCOUT",
           "0x24",
-          "UART"
+          "CLOCK"
         ],
         [
           "IRC",

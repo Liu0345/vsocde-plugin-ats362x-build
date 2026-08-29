@@ -129,8 +129,11 @@ export interface UsbDfuDeviceInfo {
   alt: number;
 }
 
+export type PanelPage = 'project' | 'build' | 'dfu' | 'identity' | 'tools' | 'chip';
+
 export type ExtensionToWebview =
   | { type: 'state'; state: ProjectState }
+  | { type: 'navigate'; page: PanelPage }
   | { type: 'hidDevices'; devices: HidDeviceInfo[] }
   | { type: 'usbDfuDevices'; devices: UsbDfuDeviceInfo[] }
   | { type: 'usbDfuFirmwareSelected'; path: string }
@@ -144,7 +147,7 @@ export type ExtensionToWebview =
 
 export type WebviewToExtension =
   | { type: 'ready' }
-  | { type: 'openPanel' }
+  | { type: 'openPanel'; page: PanelPage }
   | { type: 'selectProject' }
   | { type: 'selectRecentProject'; path: string }
   | { type: 'clearProjects' }

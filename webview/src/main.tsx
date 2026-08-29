@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { ChipPage } from './ChipPage';
 import './style.css';
 
 interface VsCodeApi {
@@ -11,7 +12,7 @@ declare function acquireVsCodeApi(): VsCodeApi;
 const vscode = acquireVsCodeApi();
 const identityCredentialSession: { username: string; password: string } = { username: '', password: '' };
 
-type Page = 'project' | 'build' | 'dfu' | 'identity' | 'tools';
+type Page = 'project' | 'build' | 'dfu' | 'identity' | 'tools' | 'chip';
 interface Tool {
   name: string;
   label: string;
@@ -118,6 +119,7 @@ function App(): JSX.Element {
     const listener = (event: MessageEvent) => {
       const message = event.data;
       if (message.type === 'state') setState(message.state);
+      if (message.type === 'navigate') setPage(message.page);
       if (message.type === 'hidDevices') {
         const devices = message.devices;
         setHidDevices(devices);
@@ -161,10 +163,11 @@ function App(): JSX.Element {
       <Tab id="dfu" label="USB/HID DFU" icon="⇄" active={page} set={setPage} />
       <Tab id="identity" label="身份认证" icon="◇" active={page} set={setPage} />
       <Tab id="tools" label="工具" icon="⚙" active={page} set={setPage} />
+      <Tab id="chip" label="芯片" icon="◉" active={page} set={setPage} />
     </nav>
 
     <section className="content">
-      <ToolRequirements tools={state.tools} />
+      <ToolRequirements tools={state.tools} page={page} />
       {page === 'project' && <div className="project-build-grid">
         <ProjectPage state={state} />
         <BuildPage state={state} disabled={!state.projectPath} projectPath={state.projectPath} />
@@ -188,6 +191,7 @@ function App(): JSX.Element {
       )}
       {page === 'identity' && <IdentityPage state={state} busy={identityBusy} events={identityEvents} results={identityResults} reservationResults={serialReservationResults} clearEvents={() => setIdentityEvents([])} />}
       {page === 'tools' && <ToolsPage state={state} notices={notices} reservedSerialPorts={reservedSerialPorts} progress={progress} />}
+      {page === 'chip' && <ChipPage />}
     </section>
   </main>;
 }
@@ -196,10 +200,10 @@ function Tab({ id, label, icon, active, set }: { id: Page; label: string; icon: 
   return <button className={active === id ? 'active' : ''} onClick={() => set(id)}><span>{icon}</span>{label}</button>;
 }
 
-function ToolRequirements({ tools }: { tools: Tool[] }): JSX.Element {
+function ToolRequirements({ tools, page }: { tools: Tool[]; page: Page }): JSX.Element {
   return <aside className="tool-requirements">
     <div className="tool-requirements-title">
-      <strong>工具版本要求</strong>
+      <div><strong>工具版本要求</strong><button className="tool-open-editor" onClick={() => vscode.postMessage({ type: 'openPanel', page })}>编辑区显示</button></div>
       <small>插件启动时检测；版本不足会在执行前阻止操作</small>
     </div>
     {tools.length === 0
@@ -216,7 +220,6 @@ function ProjectPage({ state }: { state: State }): JSX.Element {
       <div className="button-row">
         <button onClick={() => vscode.postMessage({ type: 'selectProject' })}>选择项目目录</button>
         <button className="danger-ghost" onClick={() => vscode.postMessage({ type: 'clearProjects' })}>清除全部记忆</button>
-        <button className="secondary" onClick={() => vscode.postMessage({ type: 'openPanel' })}>编辑区显示</button>
       </div>
       {state.recentProjects.length > 0 && <div className="recent-list">
         <span className="eyebrow">最近项目</span>

@@ -14,6 +14,17 @@ test('最近项目支持逐项关闭、完整路径提示和清除全部记忆',
   assert.doesNotMatch(style, /\.recent-item:hover small/, '悬停时不应展开路径并改变列表布局');
 });
 
+test('编辑区显示位于工具版本要求文字右侧', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  const projectPage = source.match(/function ProjectPage[\s\S]*?function BuildPage/)?.[0] ?? '';
+  const toolRequirements = source.match(/function ToolRequirements[\s\S]*?function ProjectPage/)?.[0] ?? '';
+  const command = manifest.contributes.commands.find((item) => item.command === 'ats362xBuild.open');
+  assert.equal(command.title, '编辑区显示');
+  assert.equal(manifest.contributes.menus, undefined);
+  assert.match(toolRequirements, /工具版本要求<\/strong><button className="tool-open-editor"[\s\S]*?type: 'openPanel', page[\s\S]*?>编辑区显示<\/button>/);
+  assert.doesNotMatch(projectPage, /编辑区显示|type: 'openPanel'/);
+});
+
 test('点击已记忆项目不改变最近项目顺序', () => {
   const store = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'projectStore.ts'), 'utf8');
   assert.match(store, /existing\.some\(\(item\) => path\.resolve\(item\) === normalized\)\s*\? existing/);
@@ -86,7 +97,7 @@ test('烧录固件页继电器默认扫描，工具页不再显示继电器', ()
 
 test('插件开头始终说明每个工具的版本要求与检测结果', () => {
   const style = fs.readFileSync(path.join(__dirname, '..', 'webview', 'src', 'style.css'), 'utf8');
-  assert.match(source, /<ToolRequirements tools=\{state\.tools\} \/>/);
+  assert.match(source, /<ToolRequirements tools=\{state\.tools\} page=\{page\} \/>/);
   assert.match(source, /function ToolRequirements\(/);
   assert.match(source, /工具版本要求/);
   assert.match(source, /tool\.minimumVersion/);

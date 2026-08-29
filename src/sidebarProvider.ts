@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { ExtensionToWebview, ProjectState, RelayDeviceInfo, RunRequest, WebviewToExtension } from './types';
+import { ExtensionToWebview, PanelPage, ProjectState, RelayDeviceInfo, RunRequest, WebviewToExtension } from './types';
 import { buildCommand } from './services/commandBuilder';
 import { chooseFirmware, discoverFirmware, FirmwareEntry } from './services/firmwareLocator';
 import { HidDfuService } from './services/hidDfu';
@@ -26,6 +26,9 @@ import {
 export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private panel?: vscode.WebviewPanel;
+  private panelWebview?: vscode.Webview;
+  private panelPage: PanelPage = 'project';
+  private panelOperations: Promise<void> = Promise.resolve();
   private readonly webviews = new WebviewRegistry<vscode.Webview>((error) => {
     console.error('[ATS362X] Webview message delivery failed', error);
   });
@@ -60,42 +63,101 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   public async resolveWebviewView(view: vscode.WebviewView): Promise<void> {
+    const webview = view.webview;
     this.view = view;
-    this.configureWebview(view.webview);
+    this.configureWebview(webview);
     view.onDidDispose(() => {
-      this.webviews.unregister(view.webview);
+      // 与编辑区面板相同，关闭回调不能再次读取已释放的 view.webview。
+      this.webviews.unregister(webview);
       if (this.view === view) this.view = undefined;
     });
     await this.refresh();
   }
 
   /** 在编辑区打开或复用完整控制台页面。 */
-  public async openPanel(): Promise<void> {
-    if (this.panel) {
+  public openPanel(page: PanelPage = 'project'): Promise<void> {
+    // 关闭面板可能与首次 refresh 交叉；打开请求必须排队，避免旧请求覆盖新面板。
+    const operation = this.panelOperations.then(() => this.openOrCreatePanel(page));
+    this.panelOperations = operation.catch(() => undefined);
+    return operation;
+  }
+
+  private async openOrCreatePanel(page: PanelPage): Promise<void> {
+    this.panelPage = page;
+    let lastDisposedError: unknown;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
       const existing = this.panel;
+      if (existing) {
+        const existingWebview = this.panelWebview;
+        if (!existingWebview) {
+          this.releasePanel(existing);
+          this.disposeStalePanel(existing);
+          continue;
+        }
+        try {
+          existing.reveal(vscode.ViewColumn.Active);
+          // reveal() 对刚释放的面板偶尔不报错，必须等待真实消息投递结果确认存活。
+          const delivered = await existingWebview.postMessage({ type: 'state', state: this.state });
+          const navigated = delivered && await existingWebview.postMessage({ type: 'navigate', page });
+          if (navigated) return;
+          lastDisposedError = new Error('Webview is disposed');
+          this.releasePanel(existing, existingWebview);
+          this.disposeStalePanel(existing);
+          continue;
+        } catch (error) {
+          if (!isWebviewDisposedError(error)) throw error;
+          lastDisposedError = error;
+          this.releasePanel(existing, existingWebview);
+          this.disposeStalePanel(existing);
+          continue;
+        }
+      }
+
+      const panel = vscode.window.createWebviewPanel(
+        'ats362xBuild.console',
+        'ATS362X 构建与烧录',
+        vscode.ViewColumn.Active,
+        { enableScripts: true, retainContextWhenHidden: true }
+      );
+      // panel.webview 必须在 panel 释放前保存；onDidDispose 中再次读取该属性
+      // 在部分 VS Code 版本会直接抛出 Webview is disposed，令旧 panel 无法清空。
+      const panelWebview = panel.webview;
+      this.panel = panel;
+      this.panelWebview = panelWebview;
+      panel.onDidDispose(() => this.releasePanel(panel, panelWebview));
       try {
-        existing.reveal(vscode.ViewColumn.Active);
-        this.post({ type: 'state', state: this.state });
+        this.configureWebview(panelWebview);
+        // Webview 加载完成后会通过 ready 主动刷新。这里不能等待工具、串口、
+        // 固件等完整扫描，否则后续打开请求会被 panelOperations 队列长时间阻塞，
+        // 用户会误以为“编辑区显示”按钮失效。
         return;
       } catch (error) {
-        this.webviews.unregister(existing.webview);
-        if (this.panel === existing) this.panel = undefined;
-        if (!isWebviewDisposedError(error)) throw error;
+        this.releasePanel(panel, panelWebview);
+        if (!isWebviewDisposedError(error)) {
+          this.disposeStalePanel(panel);
+          throw error;
+        }
+        lastDisposedError = error;
       }
     }
-    const panel = vscode.window.createWebviewPanel(
-      'ats362xBuild.console',
-      'ATS362X 构建与烧录',
-      vscode.ViewColumn.Active,
-      { enableScripts: true, retainContextWhenHidden: true }
-    );
-    this.configureWebview(panel.webview);
-    this.panel = panel;
-    panel.onDidDispose(() => {
-      this.webviews.unregister(panel.webview);
-      if (this.panel === panel) this.panel = undefined;
-    });
-    await this.refresh();
+    throw lastDisposedError instanceof Error ? lastDisposedError : new Error('Webview is disposed');
+  }
+
+  private releasePanel(panel: vscode.WebviewPanel, webview?: vscode.Webview): void {
+    if (webview) this.webviews.unregister(webview);
+    // 已关闭旧面板的延迟回调不能清除后来创建的新面板。
+    if (this.panel === panel) {
+      this.panel = undefined;
+      if (!webview || this.panelWebview === webview) this.panelWebview = undefined;
+    }
+  }
+
+  private disposeStalePanel(panel: vscode.WebviewPanel): void {
+    try {
+      panel.dispose();
+    } catch (error) {
+      if (!isWebviewDisposedError(error)) throw error;
+    }
   }
 
   public async selectProject(): Promise<void> {
@@ -179,15 +241,18 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
     this.post({ type: 'serialReservations', paths: this.serialReservation.reservedPaths });
   }
 
-  private async handle(message: WebviewToExtension): Promise<void> {
+  private async handle(message: WebviewToExtension, source?: vscode.Webview): Promise<void> {
     try {
       switch (message.type) {
         case 'ready':
         case 'refresh':
           await this.refresh();
+          if (message.type === 'ready' && source && source === this.panelWebview) {
+            await source.postMessage({ type: 'navigate', page: this.panelPage });
+          }
           break;
         case 'openPanel':
-          await this.openPanel();
+          await this.openPanel(message.page);
           break;
         case 'selectProject':
           await this.selectProject();
@@ -923,7 +988,7 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
     webview.html = this.html(webview);
     this.webviews.register(webview);
     webview.onDidReceiveMessage((message: WebviewToExtension) => {
-      void this.handle(message);
+      void this.handle(message, webview);
     });
   }
 }

@@ -50,5 +50,5 @@ export class WebviewRegistry<T extends WebviewMessageTarget> {
 
 export function isWebviewDisposedError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /webview\s+is\s+disposed/i.test(message);
+  return /(?:webview|panel).*disposed|disposed.*(?:webview|panel)/i.test(message);
 }

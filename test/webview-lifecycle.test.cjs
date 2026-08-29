@@ -44,4 +44,6 @@ test('非生命周期错误仍上报并移除故障目标', async () => {
   assert.deepEqual(unexpected, [failure]);
   assert.equal(isWebviewDisposedError(failure), false);
   assert.equal(isWebviewDisposedError('Webview is disposed'), true);
+  assert.equal(isWebviewDisposedError('Webview panel is disposed'), true);
+  assert.equal(isWebviewDisposedError('Calling reveal on disposed panel'), true);
 });

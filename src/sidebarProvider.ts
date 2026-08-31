@@ -1,7 +1,18 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { ExtensionToWebview, PanelPage, ProjectState, RelayDeviceInfo, RunRequest, WebviewToExtension } from './types';
+import {
+  CommunicationEvent,
+  CommunicationQuickCommand,
+  CommunicationStatus,
+  CommunicationTransport,
+  ExtensionToWebview,
+  PanelPage,
+  ProjectState,
+  RelayDeviceInfo,
+  RunRequest,
+  WebviewToExtension
+} from './types';
 import { buildCommand } from './services/commandBuilder';
 import { chooseFirmware, discoverFirmware, FirmwareEntry } from './services/firmwareLocator';
 import { HidDfuService } from './services/hidDfu';
@@ -15,6 +26,9 @@ import { IdentityAuthorizationService } from './services/identityAuthorization';
 import { discoverBuildOptions } from './services/buildOptions';
 import { isWebviewDisposedError, WebviewRegistry } from './services/webviewRegistry';
 import { RelayController, resolveRelayDevice } from './services/relayController';
+import { appendLineEnding, encodeCommunicationData, formatCommunicationData, validatePacketTimeout } from './services/communicationCodec';
+import { UartCommunicationService } from './services/uartCommunication';
+import { HidCommunicationService, listUacHidDevices } from './services/hidCommunication';
 import {
   createTemporaryEraseInventory,
   pulseSerialResetLines,
@@ -40,6 +54,16 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
   private readonly identity: IdentityAuthorizationService;
   private readonly serialReservation = new SerialPortReservation();
   private readonly relay = new RelayController();
+  private readonly uartCommunication: UartCommunicationService;
+  private readonly hidCommunication: HidCommunicationService;
+  private communicationSequence = 0;
+  private communicationEvents: CommunicationEvent[] = [];
+  private communicationEventBytes = 0;
+  private communicationStatuses: Record<CommunicationTransport, CommunicationStatus> = {
+    uart: { transport: 'uart', connected: false, detail: 'UART 未连接' },
+    hid: { transport: 'hid', connected: false, detail: 'HID 未连接' }
+  };
+  private communicationQuickCommands: CommunicationQuickCommand[] = [];
   private queuedFlashRequest?: RunRequest;
   private flashTransferComplete = false;
   private eraseAbort?: AbortController;
@@ -57,9 +81,20 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
       commandTimeoutMs: configuration.get<number>('identityCommandTimeoutMs'),
       httpTimeoutMs: configuration.get<number>('identityHttpTimeoutMs')
     });
+    this.uartCommunication = new UartCommunicationService(
+      (direction, packet) => this.recordCommunicationPacket('uart', direction, packet),
+      (status) => this.setCommunicationStatus('uart', status)
+    );
+    this.hidCommunication = new HidCommunicationService(
+      (direction, packet) => this.recordCommunicationPacket('hid', direction, packet),
+      (status) => this.setCommunicationStatus('hid', status)
+    );
+    this.communicationQuickCommands = this.readCommunicationQuickCommands();
     this.context.subscriptions.push(this.usbDfuOutput);
     this.context.subscriptions.push(this.flashOutput);
     this.context.subscriptions.push({ dispose: () => void this.serialReservation.release() });
+    this.context.subscriptions.push({ dispose: () => this.uartCommunication.dispose() });
+    this.context.subscriptions.push({ dispose: () => this.hidCommunication.dispose() });
   }
 
   public async resolveWebviewView(view: vscode.WebviewView): Promise<void> {
@@ -238,7 +273,7 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
       relayBusy: this.state.relayBusy
     };
     this.post({ type: 'state', state: this.state });
-    this.post({ type: 'serialReservations', paths: this.serialReservation.reservedPaths });
+    this.post({ type: 'serialReservations', paths: this.reservedSerialPaths() });
   }
 
   private async handle(message: WebviewToExtension, source?: vscode.Webview): Promise<void> {
@@ -247,6 +282,7 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
         case 'ready':
         case 'refresh':
           await this.refresh();
+          if (message.type === 'ready') this.postCommunicationSnapshot(source);
           if (message.type === 'ready' && source && source === this.panelWebview) {
             await source.postMessage({ type: 'navigate', page: this.panelPage });
           }
@@ -330,6 +366,9 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
         case 'listHid':
           this.post({ type: 'hidDevices', devices: await this.hid.list() });
           break;
+        case 'listGenericHid':
+          this.post({ type: 'genericHidDevices', devices: await listUacHidDevices() });
+          break;
         case 'listRelays':
           this.scanRelays();
           this.notice(
@@ -395,6 +434,39 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
         case 'identityCancel':
           this.identity.cancel();
           this.notice('warning', '正在取消身份认证操作…');
+          break;
+        case 'communicationConnect':
+          await this.connectCommunication(message);
+          break;
+        case 'communicationDisconnect':
+          await this.communicationService(message.transport).disconnect();
+          this.post({ type: 'serialReservations', paths: this.reservedSerialPaths() });
+          break;
+        case 'communicationSend':
+          await this.sendCommunication(message);
+          break;
+        case 'communicationSetPacketTimeout':
+          this.communicationService(message.transport).setPacketTimeout(validatePacketTimeout(message.packetTimeoutMs));
+          break;
+        case 'communicationSetSignals':
+          await this.uartCommunication.setSignals(message.dtr, message.rts);
+          break;
+        case 'communicationClear':
+          this.communicationEvents = this.communicationEvents.filter((event) => event.transport !== message.transport);
+          this.communicationEventBytes = this.communicationEvents.reduce((sum, event) => sum + event.bytes.length, 0);
+          this.post({ type: 'communicationCleared', transport: message.transport });
+          break;
+        case 'communicationExport':
+          await this.exportCommunication(message.transport, message.format);
+          break;
+        case 'communicationQuickCommandsSave':
+          await this.saveCommunicationQuickCommands(message.commands);
+          break;
+        case 'communicationQuickCommandsImport':
+          await this.importCommunicationQuickCommands();
+          break;
+        case 'communicationQuickCommandsExport':
+          await this.exportCommunicationQuickCommands();
           break;
       }
     } catch (error) {
@@ -940,6 +1012,157 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
     return input;
   }
 
+  private async connectCommunication(message: Extract<WebviewToExtension, { type: 'communicationConnect' }>): Promise<void> {
+    if (message.transport === 'uart') {
+      const resolved = this.resolveSerialPort(message.path);
+      if (this.serialReservation.isReserved(resolved)) {
+        throw new Error(`${resolved} 已由插件持续占用，请先取消持续占用`);
+      }
+      await this.uartCommunication.connect({
+        path: resolved,
+        baudRate: message.baudRate,
+        dataBits: message.dataBits,
+        stopBits: message.stopBits,
+        parity: message.parity,
+        flowControl: message.flowControl,
+        packetTimeoutMs: message.packetTimeoutMs
+      });
+      this.post({ type: 'serialReservations', paths: this.reservedSerialPaths() });
+      return;
+    }
+    await this.hidCommunication.connect({ path: message.path, packetTimeoutMs: message.packetTimeoutMs });
+  }
+
+  private async sendCommunication(message: Extract<WebviewToExtension, { type: 'communicationSend' }>): Promise<void> {
+    const source = message.mode === 'text'
+      ? appendLineEnding(message.payload, message.lineEnding)
+      : message.payload;
+    const payload = encodeCommunicationData(source, message.mode);
+    if (message.transport === 'uart') {
+      await this.uartCommunication.send(payload);
+      return;
+    }
+    const fixed64 = message.fixedHid64 === true;
+    const reportLength = fixed64 ? 64 : Number(message.reportLength ?? 64);
+    if (!Number.isInteger(reportLength) || reportLength < 1 || reportLength > 64) {
+      throw new Error('HID 报告长度必须是 1 到 64 字节');
+    }
+    await this.hidCommunication.send(payload, {
+      reportId: Number(message.reportId ?? 0),
+      reportLength,
+      padToLength: fixed64
+    });
+  }
+
+  private communicationService(transport: CommunicationTransport): UartCommunicationService | HidCommunicationService {
+    return transport === 'uart' ? this.uartCommunication : this.hidCommunication;
+  }
+
+  private recordCommunicationPacket(
+    transport: CommunicationTransport,
+    direction: 'rx' | 'tx',
+    packet: Buffer
+  ): void {
+    const event: CommunicationEvent = {
+      id: ++this.communicationSequence,
+      transport,
+      direction,
+      bytes: [...packet],
+      timestamp: new Date().toISOString()
+    };
+    this.communicationEvents.push(event);
+    this.communicationEventBytes += event.bytes.length;
+    while (this.communicationEvents.length > 2000 || this.communicationEventBytes > 8 * 1024 * 1024) {
+      const removed = this.communicationEvents.shift();
+      if (removed) this.communicationEventBytes -= removed.bytes.length;
+    }
+    this.post({ type: 'communicationEvent', event });
+  }
+
+  private setCommunicationStatus(
+    transport: CommunicationTransport,
+    status: { connected: boolean; target?: string; detail: string }
+  ): void {
+    const next: CommunicationStatus = { transport, ...status };
+    this.communicationStatuses[transport] = next;
+    this.post({ type: 'communicationStatus', status: next });
+    if (transport === 'uart') this.post({ type: 'serialReservations', paths: this.reservedSerialPaths() });
+  }
+
+  private reservedSerialPaths(): string[] {
+    const paths = new Set(this.serialReservation.reservedPaths);
+    const uart = this.communicationStatuses.uart;
+    if (uart.connected && uart.target) paths.add(uart.target);
+    return [...paths];
+  }
+
+  private postCommunicationSnapshot(source?: vscode.Webview): void {
+    const message: ExtensionToWebview = {
+      type: 'communicationSnapshot',
+      statuses: Object.values(this.communicationStatuses),
+      events: this.communicationEvents,
+      quickCommands: this.communicationQuickCommands
+    };
+    if (source) void source.postMessage(message);
+    else this.post(message);
+  }
+
+  private async exportCommunication(transport: CommunicationTransport, format: 'txt' | 'json'): Promise<void> {
+    const events = this.communicationEvents.filter((event) => event.transport === transport && event.direction === 'rx');
+    const uri = await vscode.window.showSaveDialog({
+      title: `导出${transport === 'uart' ? ' UART' : ' HID'}接收数据`,
+      defaultUri: vscode.Uri.file(`${transport}-receive-${fileTimestamp()}.${format}`),
+      filters: format === 'json' ? { JSON: ['json'] } : { '文本日志': ['txt', 'log'] }
+    });
+    if (!uri) return;
+    const content = format === 'json'
+      ? JSON.stringify(events, null, 2)
+      : events.map((event) => `${event.timestamp} ← RX [${event.bytes.length}] ${formatCommunicationData(Uint8Array.from(event.bytes), 'hex')}`).join('\n');
+    await fs.writeFile(uri.fsPath, content, 'utf8');
+    this.notice('info', `接收数据已导出：${uri.fsPath}`);
+  }
+
+  private readCommunicationQuickCommands(): CommunicationQuickCommand[] {
+    const stored = this.context.globalState?.get<unknown>('ats362xBuild.communicationQuickCommands');
+    try {
+      return validateQuickCommands(stored ?? []);
+    } catch {
+      return [];
+    }
+  }
+
+  private async saveCommunicationQuickCommands(commands: CommunicationQuickCommand[]): Promise<void> {
+    const validated = validateQuickCommands(commands);
+    this.communicationQuickCommands = validated;
+    await this.context.globalState?.update?.('ats362xBuild.communicationQuickCommands', validated);
+    this.post({ type: 'communicationQuickCommands', commands: validated });
+  }
+
+  private async importCommunicationQuickCommands(): Promise<void> {
+    const selected = await vscode.window.showOpenDialog({
+      title: '导入快捷命令',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+      filters: { JSON: ['json'] }
+    });
+    if (!selected?.[0]) return;
+    const parsed = JSON.parse(await fs.readFile(selected[0].fsPath, 'utf8')) as unknown;
+    await this.saveCommunicationQuickCommands(validateQuickCommands(parsed));
+    this.notice('info', `已导入 ${this.communicationQuickCommands.length} 条快捷命令`);
+  }
+
+  private async exportCommunicationQuickCommands(): Promise<void> {
+    const uri = await vscode.window.showSaveDialog({
+      title: '导出快捷命令',
+      defaultUri: vscode.Uri.file(`ats362x-communication-commands-${fileTimestamp()}.json`),
+      filters: { JSON: ['json'] }
+    });
+    if (!uri) return;
+    await fs.writeFile(uri.fsPath, JSON.stringify(this.communicationQuickCommands, null, 2), 'utf8');
+    this.notice('info', `快捷命令已导出：${uri.fsPath}`);
+  }
+
   private post(message: ExtensionToWebview): void {
     this.webviews.post(message);
   }
@@ -1000,4 +1223,35 @@ function getNonce(): string {
 
 function formatRelayMask(mask: number): string {
   return mask.toString(16).padStart(2, '0').toUpperCase();
+}
+
+function validateQuickCommands(value: unknown): CommunicationQuickCommand[] {
+  if (!Array.isArray(value)) throw new Error('快捷命令文件必须是 JSON 数组');
+  if (value.length > 200) throw new Error('快捷命令最多支持 200 条');
+  const ids = new Set<string>();
+  return value.map((item, index) => {
+    if (!item || typeof item !== 'object') throw new Error(`第 ${index + 1} 条快捷命令格式无效`);
+    const source = item as Partial<CommunicationQuickCommand>;
+    const id = String(source.id ?? '').trim();
+    const name = String(source.name ?? '').trim();
+    const payload = String(source.payload ?? '');
+    if (!id || ids.has(id)) throw new Error(`第 ${index + 1} 条快捷命令 ID 为空或重复`);
+    if (!name) throw new Error(`第 ${index + 1} 条快捷命令名称不能为空`);
+    if (source.transport !== 'uart' && source.transport !== 'hid') throw new Error(`第 ${index + 1} 条快捷命令通讯类型无效`);
+    if (source.mode !== 'text' && source.mode !== 'hex') throw new Error(`第 ${index + 1} 条快捷命令数据格式无效`);
+    if (!['none', 'cr', 'lf', 'crlf'].includes(String(source.lineEnding))) throw new Error(`第 ${index + 1} 条快捷命令换行格式无效`);
+    ids.add(id);
+    return {
+      id,
+      transport: source.transport,
+      name,
+      mode: source.mode,
+      payload,
+      lineEnding: source.lineEnding as CommunicationQuickCommand['lineEnding']
+    };
+  });
+}
+
+function fileTimestamp(): string {
+  return new Date().toISOString().replace(/[:.]/g, '-');
 }

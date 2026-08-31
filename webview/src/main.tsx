@@ -1,6 +1,13 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ChipPage } from './ChipPage';
+import {
+  CommunicationEvent,
+  CommunicationPage,
+  CommunicationQuickCommand,
+  CommunicationSavedState,
+  CommunicationStatus
+} from './CommunicationPage';
 import './style.css';
 
 interface VsCodeApi {
@@ -12,7 +19,7 @@ declare function acquireVsCodeApi(): VsCodeApi;
 const vscode = acquireVsCodeApi();
 const identityCredentialSession: { username: string; password: string } = { username: '', password: '' };
 
-type Page = 'project' | 'build' | 'dfu' | 'identity' | 'tools' | 'chip';
+type Page = 'project' | 'build' | 'dfu' | 'identity' | 'uart' | 'hidCommunication' | 'tools' | 'chip';
 interface Tool {
   name: string;
   label: string;
@@ -48,7 +55,9 @@ interface HidDevice {
   product?: string;
   manufacturer?: string;
   serialNumber?: string;
+  interface?: number;
   usagePage?: number;
+  usage?: number;
 }
 interface RelayDevice {
   path: string;
@@ -114,6 +123,13 @@ function App(): JSX.Element {
   const [identityEvents, setIdentityEvents] = useState<IdentityEvent[]>([]);
   const [identityResults, setIdentityResults] = useState<Partial<Record<IdentityTarget, IdentityResult>>>({});
   const [identityBusy, setIdentityBusy] = useState(false);
+  const [genericHidDevices, setGenericHidDevices] = useState<HidDevice[]>([]);
+  const [communicationEvents, setCommunicationEvents] = useState<CommunicationEvent[]>([]);
+  const [communicationStatuses, setCommunicationStatuses] = useState<Record<'uart' | 'hid', CommunicationStatus>>({
+    uart: { transport: 'uart', connected: false, detail: 'UART 未连接' },
+    hid: { transport: 'hid', connected: false, detail: 'HID 未连接' }
+  });
+  const [communicationQuickCommands, setCommunicationQuickCommands] = useState<CommunicationQuickCommand[]>([]);
 
   useEffect(() => {
     const listener = (event: MessageEvent) => {
@@ -129,6 +145,7 @@ function App(): JSX.Element {
           return devices[0].path;
         });
       }
+      if (message.type === 'genericHidDevices') setGenericHidDevices(message.devices);
       if (message.type === 'usbDfuDevices') {
         const devices = message.devices;
         setUsbDfuDevices(devices);
@@ -147,6 +164,15 @@ function App(): JSX.Element {
       if (message.type === 'identityBusy') setIdentityBusy(message.busy);
       if (message.type === 'identityEvent') setIdentityEvents((items) => [message.event, ...items].slice(0, 120));
       if (message.type === 'identityResult') setIdentityResults((items) => ({ ...items, [message.result.target]: message.result }));
+      if (message.type === 'communicationSnapshot') {
+        setCommunicationEvents(message.events);
+        setCommunicationStatuses((current) => ({ ...current, ...Object.fromEntries(message.statuses.map((status: CommunicationStatus) => [status.transport, status])) }));
+        setCommunicationQuickCommands(message.quickCommands);
+      }
+      if (message.type === 'communicationEvent') setCommunicationEvents((items) => appendCommunicationEvent(items, message.event));
+      if (message.type === 'communicationStatus') setCommunicationStatuses((items) => ({ ...items, [message.status.transport]: message.status }));
+      if (message.type === 'communicationCleared') setCommunicationEvents((items) => items.filter((item) => item.transport !== message.transport));
+      if (message.type === 'communicationQuickCommands') setCommunicationQuickCommands(message.commands);
       if (message.type === 'notice') {
         setNotices((items) => [{ level: message.level, message: message.message, time: new Date().toLocaleTimeString() }, ...items].slice(0, 20));
       }
@@ -156,12 +182,18 @@ function App(): JSX.Element {
     return () => window.removeEventListener('message', listener);
   }, []);
 
+  useEffect(() => {
+    if (page === 'hidCommunication') vscode.postMessage({ type: 'listGenericHid' });
+  }, [page]);
+
   return <main>
     <nav>
       <Tab id="project" label="项目/编译" icon="▤" active={page} set={setPage} />
       <Tab id="build" label="烧录固件" icon="⚒" active={page} set={setPage} />
       <Tab id="dfu" label="USB/HID DFU" icon="⇄" active={page} set={setPage} />
       <Tab id="identity" label="身份认证" icon="◇" active={page} set={setPage} />
+      <Tab id="uart" label="UART 通讯" icon="↔" active={page} set={setPage} />
+      <Tab id="hidCommunication" label="HID 通讯" icon="⌁" active={page} set={setPage} />
       <Tab id="tools" label="工具" icon="⚙" active={page} set={setPage} />
       <Tab id="chip" label="芯片" icon="◉" active={page} set={setPage} />
     </nav>
@@ -190,10 +222,36 @@ function App(): JSX.Element {
         />
       )}
       {page === 'identity' && <IdentityPage state={state} busy={identityBusy} events={identityEvents} results={identityResults} reservationResults={serialReservationResults} clearEvents={() => setIdentityEvents([])} />}
+      {page === 'uart' && <CommunicationPage transport="uart" serialPorts={state.serialPorts} hidDevices={genericHidDevices} status={communicationStatuses.uart} events={communicationEvents} quickCommands={communicationQuickCommands} postMessage={(message) => vscode.postMessage(message)} persisted={readCommunicationSettings('uart')} persist={(settings) => writeCommunicationSettings('uart', settings)} />}
+      {page === 'hidCommunication' && <CommunicationPage transport="hid" serialPorts={state.serialPorts} hidDevices={genericHidDevices} status={communicationStatuses.hid} events={communicationEvents} quickCommands={communicationQuickCommands} postMessage={(message) => vscode.postMessage(message)} persisted={readCommunicationSettings('hid')} persist={(settings) => writeCommunicationSettings('hid', settings)} />}
       {page === 'tools' && <ToolsPage state={state} notices={notices} reservedSerialPorts={reservedSerialPorts} progress={progress} />}
       {page === 'chip' && <ChipPage />}
     </section>
   </main>;
+}
+
+function readCommunicationSettings(transport: 'uart' | 'hid'): CommunicationSavedState | undefined {
+  const settings = vscode.getState()?.communication as Partial<Record<'uart' | 'hid', CommunicationSavedState>> | undefined;
+  return settings?.[transport];
+}
+
+function writeCommunicationSettings(transport: 'uart' | 'hid', settings: CommunicationSavedState): void {
+  const existing = vscode.getState() ?? {};
+  const communication = (existing.communication ?? {}) as Partial<Record<'uart' | 'hid', CommunicationSavedState>>;
+  vscode.setState({ ...existing, communication: { ...communication, [transport]: settings } });
+}
+
+function appendCommunicationEvent(events: CommunicationEvent[], event: CommunicationEvent): CommunicationEvent[] {
+  const next = [...events, event];
+  let bytes = 0;
+  let first = next.length;
+  while (first > 0 && next.length - first < 2000) {
+    const candidate = next[first - 1];
+    if (bytes + candidate.bytes.length > 8 * 1024 * 1024) break;
+    bytes += candidate.bytes.length;
+    first -= 1;
+  }
+  return next.slice(first);
 }
 
 function Tab({ id, label, icon, active, set }: { id: Page; label: string; icon: string; active: Page; set: (value: Page) => void }): JSX.Element {

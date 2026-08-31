@@ -103,6 +103,7 @@ export interface HidDeviceInfo {
   product?: string;
   manufacturer?: string;
   serialNumber?: string;
+  interface?: number;
   usagePage?: number;
   usage?: number;
 }
@@ -129,12 +130,42 @@ export interface UsbDfuDeviceInfo {
   alt: number;
 }
 
-export type PanelPage = 'project' | 'build' | 'dfu' | 'identity' | 'tools' | 'chip';
+export type PanelPage = 'project' | 'build' | 'dfu' | 'identity' | 'uart' | 'hidCommunication' | 'tools' | 'chip';
+
+export type CommunicationTransport = 'uart' | 'hid';
+export type CommunicationDirection = 'rx' | 'tx';
+export type CommunicationDataMode = 'text' | 'hex';
+export type CommunicationLineEnding = 'none' | 'cr' | 'lf' | 'crlf';
+
+export interface CommunicationEvent {
+  id: number;
+  transport: CommunicationTransport;
+  direction: CommunicationDirection;
+  bytes: number[];
+  timestamp: string;
+}
+
+export interface CommunicationStatus {
+  transport: CommunicationTransport;
+  connected: boolean;
+  target?: string;
+  detail: string;
+}
+
+export interface CommunicationQuickCommand {
+  id: string;
+  transport: CommunicationTransport;
+  name: string;
+  mode: CommunicationDataMode;
+  payload: string;
+  lineEnding: CommunicationLineEnding;
+}
 
 export type ExtensionToWebview =
   | { type: 'state'; state: ProjectState }
   | { type: 'navigate'; page: PanelPage }
   | { type: 'hidDevices'; devices: HidDeviceInfo[] }
+  | { type: 'genericHidDevices'; devices: HidDeviceInfo[] }
   | { type: 'usbDfuDevices'; devices: UsbDfuDeviceInfo[] }
   | { type: 'usbDfuFirmwareSelected'; path: string }
   | { type: 'serialReservations'; paths: string[] }
@@ -143,6 +174,11 @@ export type ExtensionToWebview =
   | { type: 'identityBusy'; busy: boolean; action?: IdentityAction }
   | { type: 'identityEvent'; event: IdentityEvent }
   | { type: 'identityResult'; result: IdentityResult }
+  | { type: 'communicationSnapshot'; statuses: CommunicationStatus[]; events: CommunicationEvent[]; quickCommands: CommunicationQuickCommand[] }
+  | { type: 'communicationEvent'; event: CommunicationEvent }
+  | { type: 'communicationStatus'; status: CommunicationStatus }
+  | { type: 'communicationCleared'; transport: CommunicationTransport }
+  | { type: 'communicationQuickCommands'; commands: CommunicationQuickCommand[] }
   | { type: 'notice'; level: 'info' | 'warning' | 'error'; message: string };
 
 export type WebviewToExtension =
@@ -165,6 +201,7 @@ export type WebviewToExtension =
   | { type: 'setSerialPortReservation'; port: string; reserved: boolean }
   | { type: 'run'; request: RunRequest }
   | { type: 'listHid' }
+  | { type: 'listGenericHid' }
   | { type: 'listUsbDfu' }
   | { type: 'usbDfu'; device: UsbDfuDeviceInfo; firmware: string; reset: boolean }
   | { type: 'usbDfuAbort' }
@@ -177,4 +214,15 @@ export type WebviewToExtension =
   | { type: 'relayChannel'; path: string; channel: number; enabled: boolean }
   | { type: 'eraseAbort' }
   | { type: 'identityAction'; request: IdentityRequest }
-  | { type: 'identityCancel' };
+  | { type: 'identityCancel' }
+  | { type: 'communicationConnect'; transport: 'uart'; path: string; baudRate: number; dataBits: 5 | 6 | 7 | 8; stopBits: 1 | 2; parity: 'none' | 'even' | 'odd' | 'mark' | 'space'; flowControl: 'none' | 'rtscts' | 'xonxoff'; packetTimeoutMs: number }
+  | { type: 'communicationConnect'; transport: 'hid'; path: string; packetTimeoutMs: number }
+  | { type: 'communicationDisconnect'; transport: CommunicationTransport }
+  | { type: 'communicationSend'; transport: CommunicationTransport; mode: CommunicationDataMode; payload: string; lineEnding: CommunicationLineEnding; reportId?: number; reportLength?: number; fixedHid64?: boolean }
+  | { type: 'communicationSetPacketTimeout'; transport: CommunicationTransport; packetTimeoutMs: number }
+  | { type: 'communicationSetSignals'; dtr: boolean; rts: boolean }
+  | { type: 'communicationClear'; transport: CommunicationTransport }
+  | { type: 'communicationExport'; transport: CommunicationTransport; format: 'txt' | 'json' }
+  | { type: 'communicationQuickCommandsSave'; commands: CommunicationQuickCommand[] }
+  | { type: 'communicationQuickCommandsImport' }
+  | { type: 'communicationQuickCommandsExport' };

@@ -16,6 +16,7 @@ import {
 import { buildCommand } from './services/commandBuilder';
 import { chooseFirmware, discoverFirmware, FirmwareEntry } from './services/firmwareLocator';
 import { HidDfuService } from './services/hidDfu';
+import { MidiDfuService } from './services/midiDfu';
 import { ProjectStore, isAriaWorkspace } from './services/projectStore';
 import { TerminalRunner } from './services/terminalRunner';
 import { FlashRunner, FlashToolPaths } from './services/flashRunner';
@@ -50,6 +51,7 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
   private readonly terminal = new TerminalRunner();
   private readonly flashRunner = new FlashRunner();
   private readonly hid = new HidDfuService();
+  private readonly midiDfu = new MidiDfuService();
   private readonly usbDfu = new UsbDfuService();
   private readonly identity: IdentityAuthorizationService;
   private readonly serialReservation = new SerialPortReservation();
@@ -68,6 +70,7 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
   private flashTransferComplete = false;
   private eraseAbort?: AbortController;
   private readonly usbDfuOutput = vscode.window.createOutputChannel('ATS362X USB DFU');
+  private readonly midiDfuOutput = vscode.window.createOutputChannel('ATS362X MIDI DFU');
   private readonly flashOutput = vscode.window.createOutputChannel('ATS362X 串口烧录');
 
   public constructor(
@@ -91,10 +94,12 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
     );
     this.communicationQuickCommands = this.readCommunicationQuickCommands();
     this.context.subscriptions.push(this.usbDfuOutput);
+    this.context.subscriptions.push(this.midiDfuOutput);
     this.context.subscriptions.push(this.flashOutput);
     this.context.subscriptions.push({ dispose: () => void this.serialReservation.release() });
     this.context.subscriptions.push({ dispose: () => this.uartCommunication.dispose() });
     this.context.subscriptions.push({ dispose: () => this.hidCommunication.dispose() });
+    this.context.subscriptions.push({ dispose: () => this.midiDfu.dispose() });
   }
 
   public async resolveWebviewView(view: vscode.WebviewView): Promise<void> {
@@ -399,6 +404,9 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
             )
           });
           break;
+        case 'listMidiDfu':
+          this.post({ type: 'midiDfuDevices', devices: await this.midiDfu.list() });
+          break;
         case 'usbDfu':
           await this.runUsbDfu(message.device, message.firmware, message.reset);
           break;
@@ -422,6 +430,13 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
         case 'hidAbort':
           this.hid.cancel();
           this.notice('warning', '正在取消 HID DFU…');
+          break;
+        case 'midiDfu':
+          await this.runMidiDfu(message.device, message.firmware);
+          break;
+        case 'midiDfuAbort':
+          this.midiDfu.cancel();
+          this.notice('warning', '正在取消 MIDI DFU…');
           break;
         case 'flashAbort':
           this.flashRunner.cancel();
@@ -893,6 +908,29 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
         (text) => this.usbDfuOutput.append(text)
       );
       this.notice('info', 'USB DFU 传输完成');
+    } finally {
+      this.state.busy = undefined;
+      this.post({ type: 'state', state: this.state });
+    }
+  }
+
+  private async runMidiDfu(device: import('./types').MidiDfuDeviceInfo, firmware: string): Promise<void> {
+    if (!firmware) throw new Error('请先选择用于 MIDI DFU 的 OTA .bin 固件');
+    if (path.extname(firmware).toLowerCase() !== '.bin') throw new Error('MIDI DFU 需要选择 OTA .bin 固件');
+    this.state.busy = 'midiDfu';
+    this.post({ type: 'state', state: this.state });
+    this.midiDfuOutput.clear();
+    this.midiDfuOutput.appendLine(`设备：${device.model ?? device.portName} · ${device.deviceId}`);
+    this.midiDfuOutput.appendLine(`固件：${firmware}`);
+    this.midiDfuOutput.show(true);
+    try {
+      await this.midiDfu.upload(
+        device,
+        firmware,
+        (percent, detail) => this.post({ type: 'progress', action: 'midiDfu', percent, detail }),
+        (text) => this.midiDfuOutput.append(text)
+      );
+      this.notice('info', 'MIDI DFU 完成，设备身份与版本复核通过');
     } finally {
       this.state.busy = undefined;
       this.post({ type: 'state', state: this.state });

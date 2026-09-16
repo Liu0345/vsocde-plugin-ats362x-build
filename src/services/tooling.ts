@@ -42,6 +42,22 @@ export async function inspectTools(): Promise<ToolStatus[]> {
     hidDetail = error instanceof Error ? error.message : String(error);
   }
 
+  let midiAvailable = false;
+  let midiDetail = '@julusian/midi 未加载';
+  let midiVersion: string | undefined;
+  try {
+    const module = require('@julusian/midi/lazy') as { verifyLibraryLoaded?: () => void };
+    const packageInfo = require('@julusian/midi/package.json') as { version?: string };
+    module.verifyLibraryLoaded?.();
+    midiVersion = packageInfo.version && parseToolVersion(packageInfo.version);
+    midiAvailable = typeof module.verifyLibraryLoaded === 'function' && Boolean(midiVersion) && satisfiesMinimumVersion(midiVersion!, TOOL_REQUIREMENTS['@julusian/midi']);
+    midiDetail = midiVersion
+      ? `已内置 ${midiVersion} · 要求 >= ${TOOL_REQUIREMENTS['@julusian/midi']}`
+      : '已内置，但版本无法识别';
+  } catch (error) {
+    midiDetail = error instanceof Error ? error.message : String(error);
+  }
+
   return [
     batonStatus,
     flashStatus,
@@ -53,6 +69,14 @@ export async function inspectTools(): Promise<ToolStatus[]> {
       detail: hidDetail,
       minimumVersion: TOOL_REQUIREMENTS['node-hid'],
       detectedVersion: hidVersion
+    },
+    {
+      name: '@julusian/midi',
+      label: 'MIDI DFU（CoreMIDI）',
+      available: midiAvailable,
+      detail: midiDetail,
+      minimumVersion: TOOL_REQUIREMENTS['@julusian/midi'],
+      detectedVersion: midiVersion
     }
   ];
 }

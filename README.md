@@ -1,6 +1,6 @@
 # ATS362X 构建与烧录 VS Code 插件
 
-面向 ARIA workspace / workspace track 的 ATS362X 固件操作面板。插件在 VS Code 集成终端中调用用户本机安装的 `baton`、`actions-flash` 和 `dfu-util`；HID 运行时 DFU 传输层由插件直接实现。
+面向 ARIA workspace / workspace track 的 ATS362X 固件操作面板。插件在 VS Code 集成终端中调用用户本机安装的 `baton`、`actions-flash` 和 `dfu-util`；HID 与 MIDI 运行时 DFU 传输层由插件直接实现。
 
 ## 工具版本要求
 
@@ -12,6 +12,7 @@
 | actions-flash | `0.5.0` | Baton 底层固件传输、ADFU 枚举与 `.fw` 解包 |
 | dfu-util | `0.11` | 标准 USB DFU 扫描与烧录 |
 | node-hid | `3.2.0` | HID DFU，已随插件打包 |
+| @julusian/midi | `3.8.1` | MIDI DFU 的 CoreMIDI I/O，已随插件打包 |
 
 `actions-flash` 必须从 [Pawpaw-Technology/actions-flash](https://github.com/Pawpaw-Technology/actions-flash) 官方仓库安装。Baton 报出 `actions-flash >= 0.5.0 is required` 时，说明烧录尚未开始，应先升级该工具。
 
@@ -27,13 +28,14 @@
 - 每个串口选择都会检查端口是否被占用；默认仅在任务执行期间占用，任务结束、失败或取消后释放。
 - 每个串口选择下方提供默认关闭的“持续占用串口”勾选框，可按端口独立保留占用。
 - 串口烧录页面提供 UART OTA、UART ADFU 和烧录后校验；进度只按握手、存储初始化、实际分区写入与烧录工具的真实成功标记递进。成功标记出现后按钮立即恢复为“开始烧录”；若 Baton 仍在释放串口，新任务会安全排队并在收尾后自动开始。
-- `USB/HID DFU` 合并页面按上下顺序展示 USB DFU 与 HID DFU，两套传输流程仍然独立。
+- `DFU` 合并页面按上下顺序展示 USB DFU、HID DFU 与 MIDI DFU，三套传输流程仍然独立。
 - USB DFU 扫描同时拥有 UAC 与标准 DFU Runtime 接口的设备，选择后按 VID:PID 和 USB 物理路径锁定目标；固件支持项目扫描列表和“选择固件”指定 `.bin/.dfu`。
 - USB DFU 不依赖已选择的项目；单独选择的固件仅属于 USB DFU 页面，不会修改编译、串口烧录或 HID DFU 的固件来源。
 - “烧录固件”页面自动扫描 USBRelay8（VID:PID `16C0:05DF`）并自动选择首个设备，扫描过程不会打开 HID。每次读取或切换 CH1～CH8 前都会重新扫描并按设备身份解析最新 HID 路径；瞬时占用时自动短重试。每次动作仍只临时打开 HID、读取完整位图、修改目标通道、复核其余七位不变后立即释放。
 - Actions Flash 的 ADFU 设备枚举与 `.fw` 解包。
 - 带二次确认的全 Flash 擦除，以及安全的 dry-run 预演。
 - DSPTuner v2 HID DFU：只显示同时拥有 Audio Class 接口的 UAC 厂商 HID，支持固件 CRC32、帧 CRC16、ACK 超时重试、进度与取消。
+- MFU/1 MIDI DFU：面向 macOS 的双向 USB MIDI SysEx7 更新，扫描阶段以只读 INFO 严格识别设备，支持逐包 ACK、仅超时重试、AOTA 校验、进度、取消、重启重枚举和版本复核。
 - 双身份认证：算法身份与 SN 身份分别支持状态检查、授权、清除和最终复核，互不依赖。
 - 身份认证串口支持自动扫描、完整路径和 `891` 这类串口尾号；账号、密码、波特率和全部设备命令均可在界面调整。
 - 身份认证流程用中文逐步展示串口连接、设备信息读取、服务请求、写入、重启与复核结果，并保留经过脱敏的设备原始输出。
@@ -52,7 +54,7 @@ dfu-util --version
 
 也可以在 VS Code 设置中配置 `ats362xBuild.batonPath`、`ats362xBuild.actionsFlashPath` 和 `ats362xBuild.dfuUtilPath` 为绝对路径。
 
-HID DFU 需要设备固件启用兼容的 HID 更新模块，并枚举 DSPTuner 普通 HID 接口。VSIX 包含 `node-hid` 的 macOS、Linux 与 Windows 常用架构预编译模块。
+HID DFU 需要设备固件启用兼容的 HID 更新模块，并枚举 DSPTuner 普通 HID 接口。MIDI DFU 需要设备枚举双向 MIDI 端点并实现 MFU/1 协议。VSIX 包含 `node-hid` 与 `@julusian/midi` 的 macOS 常用架构预编译模块。
 
 身份认证账号和密码默认均为空，并且仅保存在当前界面内存中，不写入 Webview 持久化状态。授权命令提供可编辑默认值；`{key}` 表示授权服务返回的数据，`{zeroKey}` 表示清除授权使用的全零载荷。SN 身份解析按完整行读取 `factory`、`modelVersion` 和 `product`，因此 `product=PRO Audio` 不会再被旧工具 2.1.1 的正则表达式截断为 `PRO`。
 

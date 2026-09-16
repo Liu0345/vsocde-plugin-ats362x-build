@@ -8,7 +8,8 @@ export const TOOL_REQUIREMENTS: Readonly<Record<ToolName, string>> = {
   baton: '0.23.0',
   'actions-flash': '0.5.0',
   'dfu-util': '0.11',
-  'node-hid': '3.2.0'
+  'node-hid': '3.2.0',
+  '@julusian/midi': '3.8.1'
 };
 
 export function parseToolVersion(output: string): string | undefined {
@@ -35,7 +36,7 @@ export async function readExecutableVersion(executable: string): Promise<{ outpu
 }
 
 export async function assertExecutableVersion(
-  name: Exclude<ToolName, 'node-hid'>,
+  name: Exclude<ToolName, 'node-hid' | '@julusian/midi'>,
   label: string,
   executable: string
 ): Promise<void> {

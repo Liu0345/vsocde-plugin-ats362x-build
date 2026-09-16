@@ -38,8 +38,8 @@ test('编译界面保留自行输入并为 App 和 Board 分别提供扫描按�
   assert.match(source, /<option value=\{customOption\}>自行输入…<\/option>/, '组合框必须保留自行输入入口');
 });
 
-test('USB DFU 和 HID DFU 位于同一页面并保持上下顺序', () => {
+test('DFU 页面按 USB、HID、MIDI 顺序显示三种独立更新方式', () => {
   const source = require('node:fs').readFileSync(path.join(__dirname, '..', 'webview', 'src', 'main.tsx'), 'utf8');
-  assert.match(source, /<Tab id="dfu" label="USB\/HID DFU"/);
-  assert.match(source, /<div className="dfu-stack">\s*<UsbDfuPage[\s\S]*?<HidPage/);
+  assert.match(source, /<Tab id="dfu" label="DFU"/);
+  assert.match(source, /<div className="dfu-stack">\s*<UsbDfuPage[\s\S]*?<HidPage[\s\S]*?<MidiDfuPage/);
 });

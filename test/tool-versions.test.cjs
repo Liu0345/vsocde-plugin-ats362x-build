@@ -26,6 +26,7 @@ test('插件声明所有外部与内置工具的最低版本', () => {
     baton: '0.23.0',
     'actions-flash': '0.5.0',
     'dfu-util': '0.11',
-    'node-hid': '3.2.0'
+    'node-hid': '3.2.0',
+    '@julusian/midi': '3.8.1'
   });
 });

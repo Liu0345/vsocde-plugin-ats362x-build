@@ -1,4 +1,4 @@
-export type ToolName = 'baton' | 'actions-flash' | 'dfu-util' | 'node-hid';
+export type ToolName = 'baton' | 'actions-flash' | 'dfu-util' | 'node-hid' | '@julusian/midi';
 
 export interface ToolStatus {
   name: ToolName;
@@ -130,6 +130,19 @@ export interface UsbDfuDeviceInfo {
   alt: number;
 }
 
+export interface MidiDfuDeviceInfo {
+  key: string;
+  portName: string;
+  deviceId: string;
+  bootId?: string;
+  model: string;
+  vendorId: number;
+  productId: number;
+  bcdDevice: number;
+  maxChunk: number;
+  maxImageSize: number;
+}
+
 export type PanelPage = 'project' | 'build' | 'dfu' | 'identity' | 'uart' | 'hidCommunication' | 'tools' | 'chip';
 
 export type CommunicationTransport = 'uart' | 'hid';
@@ -167,10 +180,11 @@ export type ExtensionToWebview =
   | { type: 'hidDevices'; devices: HidDeviceInfo[] }
   | { type: 'genericHidDevices'; devices: HidDeviceInfo[] }
   | { type: 'usbDfuDevices'; devices: UsbDfuDeviceInfo[] }
+  | { type: 'midiDfuDevices'; devices: MidiDfuDeviceInfo[] }
   | { type: 'usbDfuFirmwareSelected'; path: string }
   | { type: 'serialReservations'; paths: string[] }
   | { type: 'serialReservationResult'; requestedPort: string; resolvedPort: string; reserved: boolean }
-  | { type: 'progress'; action: 'usbDfu' | 'hidDfu' | 'flash' | 'erase' | ''; percent: number; detail: string }
+  | { type: 'progress'; action: 'usbDfu' | 'hidDfu' | 'midiDfu' | 'flash' | 'erase' | ''; percent: number; detail: string }
   | { type: 'identityBusy'; busy: boolean; action?: IdentityAction }
   | { type: 'identityEvent'; event: IdentityEvent }
   | { type: 'identityResult'; result: IdentityResult }
@@ -204,10 +218,13 @@ export type WebviewToExtension =
   | { type: 'listHid' }
   | { type: 'listGenericHid' }
   | { type: 'listUsbDfu' }
+  | { type: 'listMidiDfu' }
   | { type: 'usbDfu'; device: UsbDfuDeviceInfo; firmware: string; reset: boolean }
   | { type: 'usbDfuAbort' }
   | { type: 'hidDfu'; path: string; firmware: string; expectedBcd: number }
   | { type: 'hidAbort'; path: string }
+  | { type: 'midiDfu'; device: MidiDfuDeviceInfo; firmware: string }
+  | { type: 'midiDfuAbort' }
   | { type: 'flashAbort' }
   | { type: 'listRelays' }
   | { type: 'selectRelay'; path: string }

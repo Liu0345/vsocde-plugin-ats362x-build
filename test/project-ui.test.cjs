@@ -143,6 +143,19 @@ test('USB 和 HID DFU 在右上角显示已选设备身份摘要', () => {
   assert.match(source, /function formatDfuDeviceLabel/);
 });
 
+test('MIDI DFU 摘要复用 DFU 样式且不把协议身份当作序列号', () => {
+  const midiPage = source.match(/function MidiDfuPage[\s\S]*?const defaultIdentityCommands/)?.[0] ?? '';
+  assert.match(midiPage, /manufacturer=\{manufacturer\}/);
+  assert.match(midiPage, /product=\{product\}/);
+  assert.match(midiPage, /serialNumber=\{serialNumber\}/);
+  assert.match(midiPage, /version=\{usbDevice\?\.version \?\? formatRawBcdVersion\(device\.bcdDevice\)\}/);
+  assert.match(midiPage, /dfuName=\{dfuName\}/);
+  assert.match(source, /device\.vendorId === 0x152a \? 'Xrecer' : 'UNKNOWN'/);
+  assert.match(source, /const serialNumber = usbDevice\?\.serialNumber \?\? \(device \? 'UNKNOWN' : undefined\)/);
+  assert.doesNotMatch(midiPage, /serialNumber=\{device\.deviceId\}/);
+  assert.doesNotMatch(midiPage, /USB MIDI · MFU\/1/);
+});
+
 test('烧录串口和波特率使用同一水平对齐结构', () => {
   const style = fs.readFileSync(path.join(__dirname, '..', 'webview', 'src', 'style.css'), 'utf8');
   assert.match(source, /className="columns flash-serial-fields"/);

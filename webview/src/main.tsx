@@ -557,8 +557,6 @@ function DfuPage({ state, usbDevices, hidDevices, midiDevices, usbFirmware, prog
     <MidiDfuPage
       state={state}
       devices={midiDevices}
-      usbDevices={usbDevices}
-      hidDevices={hidDevices}
       selectedDeviceKey={midiDeviceKey}
       onDeviceKeyChange={onMidiDeviceKeyChange}
       progress={progress}
@@ -627,7 +625,7 @@ function HidPage({ state, devices, usbDevices, progress, selectedDevicePath, onD
   </Card>;
 }
 
-function MidiDfuPage({ state, devices, usbDevices, hidDevices, progress, selectedDeviceKey, onDeviceKeyChange }: { state: State; devices: MidiDfuDevice[]; usbDevices: UsbDfuDevice[]; hidDevices: HidDevice[]; progress: TransferProgress; selectedDeviceKey: string; onDeviceKeyChange: (value: string) => void }): JSX.Element {
+function MidiDfuPage({ state, devices, progress, selectedDeviceKey, onDeviceKeyChange }: { state: State; devices: MidiDfuDevice[]; progress: TransferProgress; selectedDeviceKey: string; onDeviceKeyChange: (value: string) => void }): JSX.Element {
   const [firmware, setFirmware] = useState('');
   const firmwareCandidates = useMemo(
     () => state.discoveredFirmware.filter((file) => /\.bin$/i.test(file.path)),
@@ -652,35 +650,24 @@ function MidiDfuPage({ state, devices, usbDevices, hidDevices, progress, selecte
     if (!firmware && firmwareCandidates.length > 0) setFirmware(firmwareCandidates[0].path);
   }, [firmware, firmwareCandidates]);
   const device = devices.find((item) => item.key === selectedDeviceKey);
-  const usbDevice = device ? findCompanionDevice(device, usbDevices) : undefined;
-  const hidDevice = device ? findCompanionDevice(device, hidDevices) : undefined;
-  const manufacturer = usbDevice?.manufacturer ?? hidDevice?.manufacturer ?? midiManufacturer(device);
-  const product = usbDevice?.product ?? hidDevice?.product ?? device?.model;
-  // MFU/1 deviceId 是协议身份，不是 USB 序列号；没有 DFU 序列号时明确显示 UNKNOWN。
-  const serialNumber = usbDevice?.serialNumber ?? (device ? 'UNKNOWN' : undefined);
-  const dfuName = usbDevice?.dfuName ?? (manufacturer && manufacturer !== 'UNKNOWN' ? `${manufacturer} DFU` : 'UNKNOWN');
   const busy = state.busy === 'midiDfu';
   const midiProgress = progress.action === 'midiDfu' ? progress : { action: '', percent: 0, detail: '' };
   return <Card
     title="MIDI DFU"
     subtitle="通过 MFU/1 SysEx7 协议传输 OTA .bin；逐包确认、超时重试并在重启后复核版本"
     headerAside={device && <DeviceSummary
-      manufacturer={manufacturer}
-      product={product}
+      manufacturer={midiManufacturer(device)}
+      product={device.model}
       vendorId={device.vendorId}
       productId={device.productId}
-      serialNumber={serialNumber}
-      version={usbDevice?.version ?? formatRawBcdVersion(device.bcdDevice)}
-      dfuName={dfuName}
+      serialNumber="UNKNOWN"
+      version={formatRawBcdVersion(device.bcdDevice)}
+      dfuName={midiDfuName(device)}
     />}
   >
     <div className="callout">面向 macOS 的双向 USB MIDI 更新方式，不需要进入 ADFU。扫描只发送只读 INFO 探测，仅显示完整通过 MFU/1 身份校验的设备；更新前会再次确认设备身份。</div>
-    <div className="button-row"><button className="secondary" onClick={() => guardAction(busy ? 'MIDI DFU 正在进行，请等待完成或先取消' : undefined, scanMidiDfuDevices)}>扫描 MIDI 设备</button><span className="muted">发现 {devices.length} 个 MFU/1 设备</span></div>
-    <Field label="MIDI DFU 设备"><PlaceholderSelect disabled={busy} value={selectedDeviceKey} selectedLabel={device ? midiDfuDeviceLabel(device, usbDevice, hidDevice) : undefined} preferTail={false} onChange={(event) => onDeviceKeyChange(event.target.value)}><option value="">空白-选项</option>{devices.map((item) => {
-      const companionUsb = findCompanionDevice(item, usbDevices);
-      const companionHid = findCompanionDevice(item, hidDevices);
-      return <option key={item.key} value={item.key}>{midiDfuDeviceLabel(item, companionUsb, companionHid)}</option>;
-    })}</PlaceholderSelect></Field>
+    <div className="button-row"><button className="secondary" onClick={() => guardAction(busy ? 'MIDI DFU 正在进行，请等待完成或先取消' : undefined, () => vscode.postMessage({ type: 'listMidiDfu' }))}>扫描 MIDI 设备</button><span className="muted">发现 {devices.length} 个 MFU/1 设备</span></div>
+    <Field label="MIDI DFU 设备"><PlaceholderSelect disabled={busy} value={selectedDeviceKey} selectedLabel={device ? midiDfuDeviceLabel(device) : undefined} preferTail={false} onChange={(event) => onDeviceKeyChange(event.target.value)}><option value="">空白-选项</option>{devices.map((item) => <option key={item.key} value={item.key}>{midiDfuDeviceLabel(item)}</option>)}</PlaceholderSelect></Field>
     {device && <div className="device-meta"><code>{device.portName} · 最大分包 {device.maxChunk} 字节 · 固件上限 {formatByteSize(device.maxImageSize)}</code></div>}
     <Field label="OTA .bin 固件"><div className="input-action"><PlaceholderSelect disabled={busy} value={firmware} onChange={(event) => setFirmware(event.target.value)}><option value="">空白-选项</option>{firmwareCandidates.map((file) => <option key={file.path} value={file.path} title={file.path}>{formatFirmwareOption(file)}</option>)}</PlaceholderSelect><div className="inline-actions"><button className="secondary" onClick={() => guardAction(busy ? 'MIDI DFU 正在进行，请等待完成或先取消' : undefined, () => vscode.postMessage({ type: 'scanFirmware' }))}>扫描</button><button className="secondary" onClick={() => guardAction(busy ? 'MIDI DFU 正在进行，请等待完成或先取消' : undefined, () => vscode.postMessage({ type: 'selectHidFirmware' }))}>选择固件</button></div></div></Field>
     {(busy || midiProgress.detail) && <TransferProgressBar progress={midiProgress} />}
@@ -1220,10 +1207,6 @@ function scanDfuDevices(): void {
   vscode.postMessage({ type: 'listUsbDfu' });
   vscode.postMessage({ type: 'listHid' });
 }
-function scanMidiDfuDevices(): void {
-  scanDfuDevices();
-  vscode.postMessage({ type: 'listMidiDfu' });
-}
 function findCompanionDevice<T extends { vendorId: number; productId: number; serialNumber?: string }>(source: { vendorId: number; productId: number; serialNumber?: string }, candidates: T[]): T | undefined {
   const matches = candidates.filter((item) => item.vendorId === source.vendorId && item.productId === source.productId);
   if (source.serialNumber) {
@@ -1252,15 +1235,16 @@ function hidDfuDeviceLabel(device: HidDevice, companion?: UsbDfuDevice): string 
     device.usagePage ? `HID usage 0x${hex(device.usagePage)}` : 'HID'
   );
 }
-function midiDfuDeviceLabel(device: MidiDfuDevice, usbDevice?: UsbDfuDevice, hidDevice?: HidDevice): string {
-  const manufacturer = usbDevice?.manufacturer ?? hidDevice?.manufacturer ?? midiManufacturer(device);
-  const product = usbDevice?.product ?? hidDevice?.product ?? device.model;
-  const serialNumber = usbDevice?.serialNumber ?? 'UNKNOWN';
-  return formatDfuDeviceLabel(manufacturer, product, device.vendorId, device.productId, serialNumber, device.portName);
+function midiDfuDeviceLabel(device: MidiDfuDevice): string {
+  return formatDfuDeviceLabel(midiManufacturer(device), device.model, device.vendorId, device.productId, 'UNKNOWN', device.portName);
 }
 function midiManufacturer(device: MidiDfuDevice | undefined): string | undefined {
   if (!device) return undefined;
   return device.vendorId === 0x152a ? 'Xrecer' : 'UNKNOWN';
+}
+function midiDfuName(device: MidiDfuDevice): string {
+  const manufacturer = midiManufacturer(device);
+  return manufacturer && manufacturer !== 'UNKNOWN' ? `${manufacturer} DFU` : 'UNKNOWN';
 }
 function formatRawBcdVersion(value: number): string { return value.toString(16).padStart(4, '0').toUpperCase(); }
 function formatByteSize(value: number): string { return value >= 1024 * 1024 ? `${Math.round(value / (1024 * 1024))} MiB` : `${Math.round(value / 1024)} KiB`; }

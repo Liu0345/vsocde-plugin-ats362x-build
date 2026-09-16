@@ -143,15 +143,17 @@ test('USB 和 HID DFU 在右上角显示已选设备身份摘要', () => {
   assert.match(source, /function formatDfuDeviceLabel/);
 });
 
-test('MIDI DFU 摘要复用 DFU 样式且不把协议身份当作序列号', () => {
+test('MIDI DFU 仅调整摘要显示且保持独立识别流程', () => {
   const midiPage = source.match(/function MidiDfuPage[\s\S]*?const defaultIdentityCommands/)?.[0] ?? '';
-  assert.match(midiPage, /manufacturer=\{manufacturer\}/);
-  assert.match(midiPage, /product=\{product\}/);
-  assert.match(midiPage, /serialNumber=\{serialNumber\}/);
-  assert.match(midiPage, /version=\{usbDevice\?\.version \?\? formatRawBcdVersion\(device\.bcdDevice\)\}/);
-  assert.match(midiPage, /dfuName=\{dfuName\}/);
+  assert.match(midiPage, /manufacturer=\{midiManufacturer\(device\)\}/);
+  assert.match(midiPage, /product=\{device\.model\}/);
+  assert.match(midiPage, /serialNumber="UNKNOWN"/);
+  assert.match(midiPage, /version=\{formatRawBcdVersion\(device\.bcdDevice\)\}/);
+  assert.match(midiPage, /dfuName=\{midiDfuName\(device\)\}/);
   assert.match(source, /device\.vendorId === 0x152a \? 'Xrecer' : 'UNKNOWN'/);
-  assert.match(source, /const serialNumber = usbDevice\?\.serialNumber \?\? \(device \? 'UNKNOWN' : undefined\)/);
+  assert.match(midiPage, /vscode\.postMessage\(\{ type: 'listMidiDfu' \}\)/, 'MIDI 扫描必须只执行 MIDI 探测');
+  assert.doesNotMatch(midiPage, /scanDfuDevices/, 'MIDI 扫描不得并发触发 USB 和 HID 扫描');
+  assert.doesNotMatch(midiPage, /usbDevices|hidDevices|findCompanionDevice/, 'MIDI 显示不得依赖或改变 USB/HID 识别结果');
   assert.doesNotMatch(midiPage, /serialNumber=\{device\.deviceId\}/);
   assert.doesNotMatch(midiPage, /USB MIDI · MFU\/1/);
 });

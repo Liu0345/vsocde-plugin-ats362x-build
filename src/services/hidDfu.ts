@@ -35,7 +35,8 @@ export class HidDfuService {
 
   public async list(): Promise<HidDeviceInfo[]> {
     const hid = loadNodeHid();
-    const uacIds = await detectUsbAudioDeviceIds();
+    const uacDevices = await detectUsbAudioDeviceMetadata();
+    const uacIds = new Set(uacDevices.map((device) => usbId(device.vendorId, device.productId)));
     const candidates = hid.devices()
       .filter((device) =>
         typeof device.path === 'string' &&
@@ -50,16 +51,23 @@ export class HidDfuService {
       });
     const effectiveDevices = preferredDevices.length > 0 ? preferredDevices : candidates;
     return effectiveDevices
-      .map((device) => ({
-        path: String(device.path),
-        vendorId: Number(device.vendorId ?? 0),
-        productId: Number(device.productId ?? 0),
-        product: stringOrUndefined(device.product),
-        manufacturer: stringOrUndefined(device.manufacturer),
-        serialNumber: stringOrUndefined(device.serialNumber),
-        usagePage: numberOrUndefined(device.usagePage),
-        usage: numberOrUndefined(device.usage)
-      }));
+      .map((device) => {
+        const vendorId = Number(device.vendorId ?? 0);
+        const productId = Number(device.productId ?? 0);
+        const metadata = findUsbAudioDeviceMetadata(uacDevices, vendorId, productId);
+        return {
+          path: String(device.path),
+          vendorId,
+          productId,
+          product: stringOrUndefined(device.product) ?? metadata?.product,
+          manufacturer: stringOrUndefined(device.manufacturer) ?? metadata?.manufacturer,
+          serialNumber: stringOrUndefined(device.serialNumber) ?? metadata?.serialNumber,
+          usagePage: numberOrUndefined(device.usagePage),
+          usage: numberOrUndefined(device.usage),
+          version: metadata?.version,
+          dfuName: metadata?.dfuName
+        };
+      });
   }
 
   public async upload(
@@ -190,27 +198,89 @@ async function crc32File(firmwarePath: string): Promise<number> {
  * `-d 0` 的每个顶层段对应一个 USB interface；取每段第一次出现的接口类，
  * 避免把子节点中重复的 bInterfaceClass 误当成另一个设备。
  */
-export function parseMacUsbAudioDeviceIds(output: string): Set<string> {
-  const ids = new Set<string>();
+export interface UsbAudioDeviceMetadata {
+  vendorId: number;
+  productId: number;
+  locationId?: number;
+  manufacturer?: string;
+  product?: string;
+  serialNumber?: string;
+  version?: string;
+  dfuName?: string;
+}
+
+/** 按 USB 物理位置聚合 UAC、Runtime DFU 与 HID 接口上的设备描述符。 */
+export function parseMacUsbAudioDeviceMetadata(output: string): UsbAudioDeviceMetadata[] {
+  const devices = new Map<string, UsbAudioDeviceMetadata & { hasAudio: boolean }>();
   for (const section of output.split(/(?=^\+-o )/m)) {
     const interfaceClass = firstNumericProperty(section, 'bInterfaceClass');
     const vendorId = firstNumericProperty(section, 'idVendor');
     const productId = firstNumericProperty(section, 'idProduct');
-    if (interfaceClass === 1 && vendorId !== undefined && productId !== undefined) {
-      ids.add(usbId(vendorId, productId));
-    }
+    if (interfaceClass === undefined || vendorId === undefined || productId === undefined) continue;
+    const locationId = firstNumericProperty(section, 'locationID');
+    const key = `${usbId(vendorId, productId)}@${locationId ?? 'unknown'}`;
+    const current = devices.get(key) ?? { vendorId, productId, locationId, hasAudio: false };
+    current.hasAudio ||= interfaceClass === 1;
+    current.manufacturer ??= firstStringProperty(section, 'USB Vendor Name') ?? firstStringProperty(section, 'kUSBVendorString');
+    current.product ??= firstStringProperty(section, 'USB Product Name') ?? firstStringProperty(section, 'kUSBProductString');
+    current.serialNumber ??= firstStringProperty(section, 'USB Serial Number') ?? firstStringProperty(section, 'SerialNumber');
+    const bcdDevice = firstNumericProperty(section, 'bcdDevice');
+    if (!current.version && bcdDevice !== undefined) current.version = bcdDevice.toString(16).padStart(4, '0');
+    if (interfaceClass === 0xfe) current.dfuName ??= firstStringProperty(section, 'kUSBString');
+    devices.set(key, current);
   }
-  return ids;
+  return [...devices.values()]
+    .filter((device) => device.hasAudio)
+    .map(({ hasAudio: _hasAudio, ...device }) => Object.fromEntries(
+      Object.entries(device).filter(([, value]) => value !== undefined)
+    ) as unknown as UsbAudioDeviceMetadata);
 }
 
-export async function detectUsbAudioDeviceIds(): Promise<Set<string>> {
+export function parseMacUsbAudioDeviceIds(output: string): Set<string> {
+  return new Set(parseMacUsbAudioDeviceMetadata(output).map((device) => usbId(device.vendorId, device.productId)));
+}
+
+export function findUsbAudioDeviceMetadata(
+  devices: UsbAudioDeviceMetadata[],
+  vendorId: number,
+  productId: number
+): UsbAudioDeviceMetadata | undefined {
+  const matches = devices.filter((device) => device.vendorId === vendorId && device.productId === productId);
+  if (matches.length === 0) return undefined;
+  if (matches.length === 1) return matches[0];
+  const common = (field: keyof UsbAudioDeviceMetadata): string | undefined => {
+    const values = [...new Set(matches.map((device) => device[field]).filter((value): value is string => typeof value === 'string' && value.length > 0))];
+    return values.length === 1 ? values[0] : undefined;
+  };
+  return {
+    vendorId,
+    productId,
+    manufacturer: common('manufacturer'),
+    product: common('product'),
+    serialNumber: common('serialNumber'),
+    version: common('version'),
+    dfuName: common('dfuName')
+  };
+}
+
+export async function detectUsbAudioDeviceMetadata(): Promise<UsbAudioDeviceMetadata[]> {
   if (process.platform === 'darwin') {
     const result = await execFileAsync(
       'ioreg',
       ['-p', 'IOService', '-r', '-c', 'IOUSBHostInterface', '-l', '-w', '0', '-d', '0'],
       { timeout: 5000, maxBuffer: 8 * 1024 * 1024 }
     );
-    return parseMacUsbAudioDeviceIds(result.stdout);
+    return parseMacUsbAudioDeviceMetadata(result.stdout);
+  }
+  return [...await detectUsbAudioDeviceIds()].map((id) => {
+    const [vendorId, productId] = id.split(':').map((value) => Number.parseInt(value, 16));
+    return { vendorId, productId };
+  });
+}
+
+export async function detectUsbAudioDeviceIds(): Promise<Set<string>> {
+  if (process.platform === 'darwin') {
+    return new Set((await detectUsbAudioDeviceMetadata()).map((device) => usbId(device.vendorId, device.productId)));
   }
   if (process.platform === 'linux') {
     return detectLinuxUsbAudioDeviceIds();
@@ -274,6 +344,12 @@ function firstNumericProperty(section: string, property: string): number | undef
     return Number.parseInt(tupleMatch[1], 16);
   }
   return undefined;
+}
+
+function firstStringProperty(section: string, property: string): string | undefined {
+  const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = section.match(new RegExp(`^[ \\t|]*"${escaped}" = "([^"]*)"$`, 'm'));
+  return match?.[1]?.trim() || undefined;
 }
 
 function usbId(vendorId: number, productId: number): string {

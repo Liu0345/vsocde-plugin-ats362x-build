@@ -58,6 +58,8 @@ interface HidDevice {
   interface?: number;
   usagePage?: number;
   usage?: number;
+  version?: string;
+  dfuName?: string;
 }
 interface RelayDevice {
   path: string;
@@ -92,7 +94,7 @@ interface MidiDfuDevice {
   maxImageSize: number;
 }
 interface Notice { level: string; message: string; time: string }
-interface TransferProgress { action: 'usbDfu' | 'hidDfu' | 'midiDfu' | 'flash' | 'erase' | ''; percent: number; detail: string }
+interface TransferProgress { action: 'usbDfu' | 'hidDfu' | 'midiDfu' | 'flash' | 'erase' | ''; percent: number; detail: string; active?: boolean; completed?: boolean }
 type IdentityTarget = 'algorithm' | 'sn' | 'system';
 type IdentityStatus = 'authorized' | 'unauthorized' | 'unknown' | 'running' | 'error';
 type IdentityAction = 'checkAlgorithm' | 'authorizeAlgorithm' | 'clearAlgorithm' | 'checkSn' | 'authorizeSn' | 'clearSn' | 'runCustom';
@@ -183,7 +185,13 @@ function App(): JSX.Element {
       if (message.type === 'serialReservationResult') {
         setSerialReservationResults((current) => ({ ...current, [message.requestedPort]: message.reserved }));
       }
-      if (message.type === 'progress') setProgress({ action: message.action, percent: message.percent, detail: message.detail });
+      if (message.type === 'progress') setProgress({
+        action: message.action,
+        percent: message.percent,
+        detail: message.detail,
+        active: message.active,
+        completed: message.completed
+      });
       if (message.type === 'identityBusy') setIdentityBusy(message.busy);
       if (message.type === 'identityEvent') setIdentityEvents((items) => [message.event, ...items].slice(0, 120));
       if (message.type === 'identityResult') setIdentityResults((items) => ({ ...items, [message.result.target]: message.result }));
@@ -452,7 +460,7 @@ function FlashPage({
   </Card>;
 }
 
-function UsbDfuPage({ state, devices, hidDevices, selectedFirmware, selectedDeviceKey, onDeviceKeyChange, progress }: { state: State; devices: UsbDfuDevice[]; hidDevices: HidDevice[]; selectedFirmware: string; selectedDeviceKey: string; onDeviceKeyChange: (value: string) => void; progress: TransferProgress }): JSX.Element {
+function UsbDfuPage({ state, devices, selectedFirmware, selectedDeviceKey, onDeviceKeyChange, progress }: { state: State; devices: UsbDfuDevice[]; selectedFirmware: string; selectedDeviceKey: string; onDeviceKeyChange: (value: string) => void; progress: TransferProgress }): JSX.Element {
   const candidates = useMemo(
     () => {
       const firmwareFiles = state.discoveredFirmware
@@ -486,8 +494,7 @@ function UsbDfuPage({ state, devices, hidDevices, selectedFirmware, selectedDevi
     }
   }, [devices, selectedDeviceKey, onDeviceKeyChange]);
   const device = devices.find((item) => item.key === selectedDeviceKey);
-  const hidDevice = device ? findCompanionDevice(device, hidDevices) : undefined;
-  const deviceLabel = device ? usbDfuDeviceLabel(device, hidDevice) : undefined;
+  const deviceLabel = device ? usbDfuDeviceLabel(device) : undefined;
   const busy = state.busy === 'usbDfu';
   const hasFirmware = Boolean(firmware);
   const usbProgress = progress.action === 'usbDfu' ? progress : { action: '', percent: 0, detail: '' };
@@ -496,21 +503,18 @@ function UsbDfuPage({ state, devices, hidDevices, selectedFirmware, selectedDevi
     title="USB DFU"
     subtitle="无需选择项目，可直接扫描设备并选择任意 .bin/.dfu 固件"
     headerAside={device && <DeviceSummary
-      manufacturer={device.manufacturer ?? hidDevice?.manufacturer}
-      product={device.product ?? hidDevice?.product}
+      manufacturer={device.manufacturer}
+      product={device.product}
       vendorId={device.vendorId}
       productId={device.productId}
-      serialNumber={device.serialNumber ?? hidDevice?.serialNumber}
+      serialNumber={device.serialNumber ?? 'UNKNOWN'}
       version={device.version}
       dfuName={device.dfuName}
     />}
   >
     <div className="callout">先按 USB Audio Class 进行设备筛选；若无法匹配到已识别的 UAC 设备，则回退显示全部 Runtime DFU 设备。传输时按 VID:PID 和 USB 物理路径锁定所选设备。单独选择的固件仅供本页面使用，不会改变其他功能的固件来源。</div>
-    <div className="button-row"><button className="secondary" onClick={() => guardAction(busy ? 'USB DFU 正在进行，请等待完成或先取消' : undefined, scanDfuDevices)}>扫描 UAC 设备</button><span className="muted">发现 {devices.length} 个可用设备</span></div>
-    <Field label="UAC 设备"><PlaceholderSelect disabled={busy} value={selectedDeviceKey} selectedLabel={deviceLabel} preferTail={false} onChange={(event) => onDeviceKeyChange(event.target.value)}><option value="">空白-选项</option>{devices.map((item) => {
-      const companion = findCompanionDevice(item, hidDevices);
-      return <option key={item.key} value={item.key}>{usbDfuDeviceLabel(item, companion)}</option>;
-    })}</PlaceholderSelect></Field>
+    <div className="button-row"><button className="secondary" onClick={() => guardAction(busy ? 'USB DFU 正在进行，请等待完成或先取消' : undefined, () => vscode.postMessage({ type: 'listUsbDfu' }))}>扫描 UAC 设备</button><span className="muted">发现 {devices.length} 个可用设备</span></div>
+    <Field label="UAC 设备"><PlaceholderSelect disabled={busy} value={selectedDeviceKey} selectedLabel={deviceLabel} preferTail={false} onChange={(event) => onDeviceKeyChange(event.target.value)}><option value="">空白-选项</option>{devices.map((item) => <option key={item.key} value={item.key}>{usbDfuDeviceLabel(item)}</option>)}</PlaceholderSelect></Field>
     {device && <div className="device-meta"><code>USB 路径 {device.usbPath}</code></div>}
     <Field label="DFU 固件"><div className="input-action"><PlaceholderSelect disabled={busy} value={firmware} onChange={(event) => setFirmware(event.target.value)}><option value="">空白-选项</option>{state.discoveredFirmware.filter((file) => /\.(bin|dfu)$/i.test(file.path)).map((file) => <option key={file.path} value={file.path} title={file.path}>{formatFirmwareOption(file)}</option>)}</PlaceholderSelect><div className="inline-actions"><button className="secondary" onClick={() => guardAction(busy ? 'USB DFU 正在进行，请等待完成或先取消' : undefined, () => vscode.postMessage({ type: 'scanFirmware' }))}>扫描</button><button className="secondary" onClick={() => guardAction(busy ? 'USB DFU 正在进行，请等待完成或先取消' : undefined, () => vscode.postMessage({ type: 'selectUsbDfuFirmware' }))}>选择固件</button></div></div></Field>
     <Check label="传输完成后请求 USB 复位" checked={reset} set={setReset} />
@@ -540,7 +544,6 @@ function DfuPage({ state, usbDevices, hidDevices, midiDevices, usbFirmware, prog
     <UsbDfuPage
       state={state}
       devices={usbDevices}
-      hidDevices={hidDevices}
       selectedFirmware={usbFirmware}
       selectedDeviceKey={usbDeviceKey}
       onDeviceKeyChange={onUsbDeviceKeyChange}
@@ -549,7 +552,6 @@ function DfuPage({ state, usbDevices, hidDevices, midiDevices, usbFirmware, prog
     <HidPage
       state={state}
       devices={hidDevices}
-      usbDevices={usbDevices}
       selectedDevicePath={hidDevicePath}
       onDevicePathChange={onHidDevicePathChange}
       progress={progress}
@@ -564,7 +566,7 @@ function DfuPage({ state, usbDevices, hidDevices, midiDevices, usbFirmware, prog
   </div>;
 }
 
-function HidPage({ state, devices, usbDevices, progress, selectedDevicePath, onDevicePathChange }: { state: State; devices: HidDevice[]; usbDevices: UsbDfuDevice[]; progress: TransferProgress; selectedDevicePath: string; onDevicePathChange: (value: string) => void }): JSX.Element {
+function HidPage({ state, devices, progress, selectedDevicePath, onDevicePathChange }: { state: State; devices: HidDevice[]; progress: TransferProgress; selectedDevicePath: string; onDevicePathChange: (value: string) => void }): JSX.Element {
   const [firmware, setFirmware] = useState('');
   const firmwareCandidates = useMemo(
     () => state.discoveredFirmware.filter((file) => /\.bin$/i.test(file.path)),
@@ -585,8 +587,7 @@ function HidPage({ state, devices, usbDevices, progress, selectedDevicePath, onD
     setFirmware
   );
   const device = devices.find((item) => item.path === selectedDevicePath);
-  const usbDevice = device ? findCompanionDevice(device, usbDevices) : undefined;
-  const deviceLabel = device ? hidDfuDeviceLabel(device, usbDevice) : undefined;
+  const deviceLabel = device ? hidDfuDeviceLabel(device) : undefined;
   const busy = state.busy === 'hidDfu';
   const hidProgress = progress.action === 'hidDfu' ? progress : { action: '', percent: 0, detail: '' };
   useEffect(() => {
@@ -601,21 +602,18 @@ function HidPage({ state, devices, usbDevices, progress, selectedDevicePath, onD
     title="HID DFU"
     subtitle="通过 DSPTuner v2 HID 协议传输 OTA .bin；每帧 CRC16，整包 CRC32"
     headerAside={device && <DeviceSummary
-      manufacturer={device.manufacturer ?? usbDevice?.manufacturer}
-      product={device.product ?? usbDevice?.product}
+      manufacturer={device.manufacturer}
+      product={device.product}
       vendorId={device.vendorId}
       productId={device.productId}
-      serialNumber={device.serialNumber ?? usbDevice?.serialNumber}
-      version={usbDevice?.version}
-      dfuName={usbDevice?.dfuName}
+      serialNumber={device.serialNumber ?? 'UNKNOWN'}
+      version={device.version}
+      dfuName={device.dfuName}
     />}
   >
     <div className="callout">HID DFU 不进入 ADFU 模式。设备必须已枚举普通 HID 接口，固件上需启用 HID 更新模块。先按 UAC 信息进行筛选，匹配失败时会回退显示全部候选设备。</div>
-    <div className="button-row"><button className="secondary" onClick={() => guardAction(busy ? 'HID DFU 正在进行，请等待完成或先取消' : undefined, scanDfuDevices)}>扫描 UAC HID</button><span className="muted">发现 {devices.length} 个 UAC 厂商 HID 接口</span></div>
-    <Field label="HID 设备"><PlaceholderSelect disabled={busy} value={selectedDevicePath} selectedLabel={deviceLabel} preferTail={false} onChange={(e) => onDevicePathChange(e.target.value)}><option value="">空白-选项</option>{devices.map((item) => {
-      const companion = findCompanionDevice(item, usbDevices);
-      return <option key={item.path} value={item.path}>{hidDfuDeviceLabel(item, companion)}</option>;
-    })}</PlaceholderSelect></Field>
+    <div className="button-row"><button className="secondary" onClick={() => guardAction(busy ? 'HID DFU 正在进行，请等待完成或先取消' : undefined, () => vscode.postMessage({ type: 'listHid' }))}>扫描 UAC HID</button><span className="muted">发现 {devices.length} 个 UAC 厂商 HID 接口</span></div>
+    <Field label="HID 设备"><PlaceholderSelect disabled={busy} value={selectedDevicePath} selectedLabel={deviceLabel} preferTail={false} onChange={(e) => onDevicePathChange(e.target.value)}><option value="">空白-选项</option>{devices.map((item) => <option key={item.path} value={item.path}>{hidDfuDeviceLabel(item)}</option>)}</PlaceholderSelect></Field>
     <Field label="OTA .bin 固件"><div className="input-action"><PlaceholderSelect value={firmware} onChange={(e) => setFirmware(e.target.value)}><option value="">空白-选项</option>{firmwareCandidates.map((file) => <option key={file.path} value={file.path} title={file.path}>{formatFirmwareOption(file)}</option>)}</PlaceholderSelect><div className="inline-actions"><button className="secondary" onClick={() => guardAction(busy ? 'HID DFU 正在进行，请等待完成或先取消' : undefined, () => vscode.postMessage({ type: 'scanFirmware' }))}>扫描</button><button className="secondary" onClick={() => guardAction(busy ? 'HID DFU 正在进行，请等待完成或先取消' : undefined, () => vscode.postMessage({ type: 'selectHidFirmware' }))}>选择固件</button></div></div></Field>
     {(busy || hidProgress.detail) && <TransferProgressBar progress={hidProgress} />}
     <div className="button-row"><button onClick={() => guardAction(
@@ -650,8 +648,14 @@ function MidiDfuPage({ state, devices, progress, selectedDeviceKey, onDeviceKeyC
     if (!firmware && firmwareCandidates.length > 0) setFirmware(firmwareCandidates[0].path);
   }, [firmware, firmwareCandidates]);
   const device = devices.find((item) => item.key === selectedDeviceKey);
-  const busy = state.busy === 'midiDfu';
-  const midiProgress = progress.action === 'midiDfu' ? progress : { action: '', percent: 0, detail: '' };
+  const midiProgress: TransferProgress = progress.action === 'midiDfu'
+    ? progress
+    : { action: '', percent: 0, detail: '' };
+  // 运行状态由本次 MIDI DFU 进度直接确认；state.busy 只作为旧消息兼容后备。
+  // 这样即使 Webview 的 state 快照迟到，传输期间也始终能取消，终态也会立即解锁下一次更新。
+  const busy = midiProgress.action === 'midiDfu' && typeof midiProgress.active === 'boolean'
+    ? midiProgress.active
+    : state.busy === 'midiDfu';
   return <Card
     title="MIDI DFU"
     subtitle="通过 MFU/1 SysEx7 协议传输 OTA .bin；逐包确认、超时重试并在重启后复核版本"
@@ -1203,35 +1207,23 @@ function guardAction(problem: string | undefined, action: () => void): void {
 
 function run(action: string, options: Record<string, string | boolean>): void { vscode.postMessage({ type: 'run', request: { action, options } }); }
 function checkSerialPort(port: string): void { if (port.trim()) vscode.postMessage({ type: 'checkSerialPort', port }); }
-function scanDfuDevices(): void {
-  vscode.postMessage({ type: 'listUsbDfu' });
-  vscode.postMessage({ type: 'listHid' });
-}
-function findCompanionDevice<T extends { vendorId: number; productId: number; serialNumber?: string }>(source: { vendorId: number; productId: number; serialNumber?: string }, candidates: T[]): T | undefined {
-  const matches = candidates.filter((item) => item.vendorId === source.vendorId && item.productId === source.productId);
-  if (source.serialNumber) {
-    const exact = matches.find((item) => item.serialNumber === source.serialNumber);
-    if (exact) return exact;
-  }
-  return matches.length === 1 ? matches[0] : undefined;
-}
-function usbDfuDeviceLabel(device: UsbDfuDevice, companion?: HidDevice): string {
+function usbDfuDeviceLabel(device: UsbDfuDevice): string {
   return formatDfuDeviceLabel(
-    device.manufacturer ?? companion?.manufacturer,
-    device.product ?? companion?.product,
+    device.manufacturer,
+    device.product,
     device.vendorId,
     device.productId,
-    device.serialNumber ?? companion?.serialNumber,
+    device.serialNumber,
     device.dfuName ?? `USB ${device.usbPath}`
   );
 }
-function hidDfuDeviceLabel(device: HidDevice, companion?: UsbDfuDevice): string {
+function hidDfuDeviceLabel(device: HidDevice): string {
   return formatDfuDeviceLabel(
-    device.manufacturer ?? companion?.manufacturer,
-    device.product ?? companion?.product,
+    device.manufacturer,
+    device.product,
     device.vendorId,
     device.productId,
-    device.serialNumber ?? companion?.serialNumber,
+    device.serialNumber,
     device.usagePage ? `HID usage 0x${hex(device.usagePage)}` : 'HID'
   );
 }

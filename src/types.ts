@@ -106,6 +106,8 @@ export interface HidDeviceInfo {
   interface?: number;
   usagePage?: number;
   usage?: number;
+  version?: string;
+  dfuName?: string;
 }
 
 export interface RelayDeviceInfo {
@@ -184,7 +186,7 @@ export type ExtensionToWebview =
   | { type: 'usbDfuFirmwareSelected'; path: string }
   | { type: 'serialReservations'; paths: string[] }
   | { type: 'serialReservationResult'; requestedPort: string; resolvedPort: string; reserved: boolean }
-  | { type: 'progress'; action: 'usbDfu' | 'hidDfu' | 'midiDfu' | 'flash' | 'erase' | ''; percent: number; detail: string }
+  | { type: 'progress'; action: 'usbDfu' | 'hidDfu' | 'midiDfu' | 'flash' | 'erase' | ''; percent: number; detail: string; active?: boolean; completed?: boolean }
   | { type: 'identityBusy'; busy: boolean; action?: IdentityAction }
   | { type: 'identityEvent'; event: IdentityEvent }
   | { type: 'identityResult'; result: IdentityResult }

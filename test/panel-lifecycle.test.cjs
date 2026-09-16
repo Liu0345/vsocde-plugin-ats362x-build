@@ -96,6 +96,57 @@ test('从当前选项打开编辑区时，新建与复用面板都会跳转到�
   assert.deepEqual(panels[0].sentMessages.at(-1), { type: 'navigate', page: 'tools' });
 });
 
+test('编辑区关闭重开后会恢复三种 DFU 各自最后一次扫描结果', async () => {
+  const panels = [];
+  const vscodeMock = createVscodeMock(panels);
+  const Provider = loadProvider(vscodeMock);
+  const provider = createProvider(Provider);
+  provider.refresh = async () => {};
+  provider.hidDfuDevices = [{ path: 'hid-1', vendorId: 1, productId: 2 }];
+  provider.usbDfuDevices = [{ key: 'usb-1', vendorId: 1, productId: 2, usbPath: '0-1', alt: 0 }];
+  provider.midiDfuDevices = [{ key: 'midi-1', portName: 'midi', deviceId: 'dev', model: 'model', vendorId: 1, productId: 2, bcdDevice: 1, maxChunk: 512, maxImageSize: 1024 }];
+
+  await provider.openPanel('dfu');
+  await panels[0].fireMessage({ type: 'ready' });
+  panels[0].fireDispose();
+  await provider.openPanel('dfu');
+  await panels[1].fireMessage({ type: 'ready' });
+
+  const restored = panels[1].sentMessages.filter((message) => ['hidDevices', 'usbDfuDevices', 'midiDfuDevices'].includes(message.type));
+  assert.deepEqual(restored, [
+    { type: 'hidDevices', devices: provider.hidDfuDevices },
+    { type: 'usbDfuDevices', devices: provider.usbDfuDevices },
+    { type: 'midiDfuDevices', devices: provider.midiDfuDevices }
+  ]);
+});
+
+test('MIDI DFU 完整成功后明确发送完成状态并立即释放再次更新', async () => {
+  const panels = [];
+  const vscodeMock = createVscodeMock(panels);
+  const Provider = loadProvider(vscodeMock);
+  const provider = createProvider(Provider);
+  provider.refresh = async () => {};
+  provider.midiDfu.upload = async (_device, _firmware, onProgress) => {
+    onProgress(100, '固件已传输，正在请求设备校验并提交');
+  };
+
+  await provider.openPanel('dfu');
+  await panels[0].fireMessage({
+    type: 'midiDfu',
+    device: { key: 'midi-1', portName: 'midi', deviceId: 'dev', model: 'model', vendorId: 1, productId: 2, bcdDevice: 1, maxChunk: 512, maxImageSize: 1024 },
+    firmware: '/tmp/firmware.bin'
+  });
+
+  const progress = panels[0].sentMessages.filter((message) => message.type === 'progress' && message.action === 'midiDfu');
+  assert.equal(progress[0].active, true);
+  assert.equal(progress[0].completed, false);
+  assert.equal(progress.at(-1).active, false);
+  assert.equal(progress.at(-1).completed, true);
+  assert.match(progress.at(-1).detail, /完成/);
+  const finalState = panels[0].sentMessages.filter((message) => message.type === 'state').at(-1);
+  assert.equal(finalState.state.busy, undefined);
+});
+
 function loadProvider(vscodeMock) {
   const originalLoad = Module._load;
   try {

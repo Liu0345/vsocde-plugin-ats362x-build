@@ -2,7 +2,7 @@ import { ChildProcess, execFile, spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { UsbDfuDeviceInfo } from '../types';
-import { detectUsbAudioDeviceIds } from './hidDfu';
+import { detectUsbAudioDeviceMetadata, findUsbAudioDeviceMetadata } from './hidDfu';
 
 const execFileAsync = promisify(execFile);
 
@@ -112,25 +112,32 @@ export function extractDfuPercentages(output: string): number[] {
 
 /** 扫描同时提供 USB Audio Class 和标准 DFU Runtime 接口的设备。 */
 export async function listUsbDfuDevices(executable = 'dfu-util'): Promise<UsbDfuDeviceInfo[]> {
-  const [uacIds, result] = await Promise.all([
-    detectUsbAudioDeviceIds(),
+  const [uacDevices, result] = await Promise.all([
+    detectUsbAudioDeviceMetadata(),
     execFileAsync(executable, ['-l'], { timeout: 5000, maxBuffer: 4 * 1024 * 1024 })
   ]);
+  const uacIds = new Set(uacDevices.map((device) => usbId(device.vendorId, device.productId)));
   const records = parseDfuUtilList(`${result.stdout}\n${result.stderr}`);
   const runtimeRecords = records.filter((record) => record.mode === 'Runtime');
   const preferredRecords = uacIds.size === 0 ? runtimeRecords : runtimeRecords.filter((record) => uacIds.has(usbId(record.vendorId, record.productId)));
   const effectiveRecords = preferredRecords.length > 0 ? preferredRecords : runtimeRecords;
   return effectiveRecords
-    .map((record) => ({
-      key: `${usbId(record.vendorId, record.productId)}@${record.usbPath}#${record.serialNumber ?? ''}`,
-      vendorId: record.vendorId,
-      productId: record.productId,
-      usbPath: record.usbPath,
-      serialNumber: record.serialNumber,
-      dfuName: record.name,
-      version: record.version,
-      alt: record.alt
-    }));
+    .map((record) => {
+      const metadata = findUsbAudioDeviceMetadata(uacDevices, record.vendorId, record.productId);
+      const recordSerial = record.serialNumber?.toUpperCase() === 'UNKNOWN' ? undefined : record.serialNumber;
+      return {
+        key: `${usbId(record.vendorId, record.productId)}@${record.usbPath}#${record.serialNumber ?? ''}`,
+        vendorId: record.vendorId,
+        productId: record.productId,
+        usbPath: record.usbPath,
+        serialNumber: recordSerial ?? metadata?.serialNumber ?? record.serialNumber,
+        product: metadata?.product,
+        manufacturer: metadata?.manufacturer,
+        dfuName: record.name ?? metadata?.dfuName,
+        version: record.version ?? metadata?.version,
+        alt: record.alt
+      };
+    });
 }
 
 /** 解析 dfu-util -l 输出；保留 USB 路径以区分 VID/PID 相同的多台设备。 */

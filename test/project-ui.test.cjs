@@ -134,13 +134,23 @@ test('编译复选框使用紧凑尺寸而不继承普通输入框高度', () =>
 });
 
 test('USB 和 HID DFU 在右上角显示已选设备身份摘要', () => {
+  const hidPage = source.match(/function HidPage[\s\S]*?function MidiDfuPage/)?.[0] ?? '';
   assert.match(source, /function DeviceSummary\(/);
   assert.match(source, /`0x\$\{hex\(vendorId\)\} \/ 0x\$\{hex\(productId\)\}`/);
   assert.match(source, /\['DFU 字符串', dfuName\]/);
   assert.match(source, /headerAside=\{device && <DeviceSummary/);
-  assert.match(source, /function findCompanionDevice/);
+  assert.match(hidPage, /serialNumber=\{device\.serialNumber \?\? 'UNKNOWN'\}/, 'HID 未提供序列号时也必须显示 SN UNKNOWN');
   assert.match(source, /selectedLabel=\{deviceLabel\} preferTail=\{false\}/, 'DFU 设备选中后必须复用选项标签，不能显示内部 key 或路径');
   assert.match(source, /function formatDfuDeviceLabel/);
+});
+
+test('USB DFU 和 HID DFU 独立扫描且不借用对方显示状态', () => {
+  const usbPage = source.match(/function UsbDfuPage[\s\S]*?function DfuPage/)?.[0] ?? '';
+  const hidPage = source.match(/function HidPage[\s\S]*?function MidiDfuPage/)?.[0] ?? '';
+  assert.match(usbPage, /vscode\.postMessage\(\{ type: 'listUsbDfu' \}\)/);
+  assert.doesNotMatch(usbPage, /listHid|hidDevices|findCompanionDevice|scanDfuDevices/);
+  assert.match(hidPage, /vscode\.postMessage\(\{ type: 'listHid' \}\)/);
+  assert.doesNotMatch(hidPage, /listUsbDfu|usbDevices|findCompanionDevice|scanDfuDevices/);
 });
 
 test('MIDI DFU 仅调整摘要显示且保持独立识别流程', () => {
@@ -156,6 +166,13 @@ test('MIDI DFU 仅调整摘要显示且保持独立识别流程', () => {
   assert.doesNotMatch(midiPage, /usbDevices|hidDevices|findCompanionDevice/, 'MIDI 显示不得依赖或改变 USB/HID 识别结果');
   assert.doesNotMatch(midiPage, /serialNumber=\{device\.deviceId\}/);
   assert.doesNotMatch(midiPage, /USB MIDI · MFU\/1/);
+});
+
+test('MIDI DFU 更新期间保留取消，完整结束后立即解除忙碌', () => {
+  const midiPage = source.match(/function MidiDfuPage[\s\S]*?const defaultIdentityCommands/)?.[0] ?? '';
+  assert.match(midiPage, /typeof midiProgress\.active === 'boolean'[\s\S]*?\? midiProgress\.active[\s\S]*?: state\.busy === 'midiDfu'/, '按钮状态必须优先采用本次 MIDI DFU 的明确运行状态');
+  assert.match(midiPage, /\{busy && <button className="danger"/, '校验、提交和重启复核期间仍应显示取消按钮');
+  assert.doesNotMatch(midiPage, /midiProgress\.percent < 100/, '数据百分比不能代表完整更新流程已经结束');
 });
 
 test('烧录串口和波特率使用同一水平对齐结构', () => {

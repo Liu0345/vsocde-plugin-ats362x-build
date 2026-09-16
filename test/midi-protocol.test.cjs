@@ -89,14 +89,15 @@ test('同名重复 MIDI 端点使用全组合候选，异名端点按 CoreMIDI �
   ]);
 });
 
-test('停等客户端忽略旧会话帧，并只接受当前会话与序号', async () => {
+test('停等客户端忽略旧会话和旧序号帧，并只接受当前会话与序号', async () => {
   const statusOk = Buffer.from([0, 0, 0x34, 0x12]);
   const transport = new MockTransport([
-    encodeMidiDfuFrame(MidiDfuCommand.Info | MidiDfuCommand.Response, 99, 1, statusOk),
-    encodeMidiDfuFrame(MidiDfuCommand.Info | MidiDfuCommand.Response, 7, 1, statusOk)
+    encodeMidiDfuFrame(MidiDfuCommand.Info | MidiDfuCommand.Response, 99, 2, statusOk),
+    encodeMidiDfuFrame(MidiDfuCommand.Info | MidiDfuCommand.Response, 7, 1, statusOk),
+    encodeMidiDfuFrame(MidiDfuCommand.Info | MidiDfuCommand.Response, 7, 2, statusOk)
   ]);
   const client = new MidiDfuClient(transport, 7, () => {});
-  assert.deepEqual(await client.exchange(MidiDfuCommand.Info, 1, Buffer.alloc(0), 100, 0), Buffer.from([0x34, 0x12]));
+  assert.deepEqual(await client.exchange(MidiDfuCommand.Info, 2, Buffer.alloc(0), 100, 0), Buffer.from([0x34, 0x12]));
   assert.equal(transport.sent.length, 1);
 });
 

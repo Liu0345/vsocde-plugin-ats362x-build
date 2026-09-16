@@ -7,10 +7,13 @@ import {
   CommunicationStatus,
   CommunicationTransport,
   ExtensionToWebview,
+  HidDeviceInfo,
+  MidiDfuDeviceInfo,
   PanelPage,
   ProjectState,
   RelayDeviceInfo,
   RunRequest,
+  UsbDfuDeviceInfo,
   WebviewToExtension
 } from './types';
 import { buildCommand } from './services/commandBuilder';
@@ -48,6 +51,11 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
     console.error('[ATS362X] Webview message delivery failed', error);
   });
   private state: ProjectState = { recentProjects: [], discoveredFirmware: [], serialPorts: [], tools: [], buildOptions: [], relayDevices: [] };
+  // DFU 扫描结果属于扩展会话，而不是某一个 Webview。侧边栏和编辑区可能被分别
+  // 销毁/重建，集中保存才能避免重开编辑区后又回到“0 个设备”。
+  private hidDfuDevices: HidDeviceInfo[] = [];
+  private usbDfuDevices: UsbDfuDeviceInfo[] = [];
+  private midiDfuDevices: MidiDfuDeviceInfo[] = [];
   private readonly terminal = new TerminalRunner();
   private readonly flashRunner = new FlashRunner();
   private readonly hid = new HidDfuService();
@@ -291,7 +299,10 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
         case 'ready':
         case 'refresh':
           await this.refresh();
-          if (message.type === 'ready') this.postCommunicationSnapshot(source);
+          if (message.type === 'ready') {
+            this.postCommunicationSnapshot(source);
+            this.postDfuSnapshot(source);
+          }
           if (message.type === 'ready' && source && source === this.panelWebview) {
             await source.postMessage({ type: 'navigate', page: this.panelPage });
           }
@@ -373,7 +384,8 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
           await this.run(message.request);
           break;
         case 'listHid':
-          this.post({ type: 'hidDevices', devices: await this.hid.list() });
+          this.hidDfuDevices = await this.hid.list();
+          this.post({ type: 'hidDevices', devices: this.hidDfuDevices });
           break;
         case 'listGenericHid':
           this.post({ type: 'genericHidDevices', devices: await listUacHidDevices() });
@@ -397,15 +409,17 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
           await this.setRelayChannel(message.path, message.channel, message.enabled);
           break;
         case 'listUsbDfu':
+          this.usbDfuDevices = await listUsbDfuDevices(
+            vscode.workspace.getConfiguration('ats362xBuild').get<string>('dfuUtilPath', 'dfu-util')
+          );
           this.post({
             type: 'usbDfuDevices',
-            devices: await listUsbDfuDevices(
-              vscode.workspace.getConfiguration('ats362xBuild').get<string>('dfuUtilPath', 'dfu-util')
-            )
+            devices: this.usbDfuDevices
           });
           break;
         case 'listMidiDfu':
-          this.post({ type: 'midiDfuDevices', devices: await this.midiDfu.list() });
+          this.midiDfuDevices = await this.midiDfu.list();
+          this.post({ type: 'midiDfuDevices', devices: this.midiDfuDevices });
           break;
         case 'usbDfu':
           await this.runUsbDfu(message.device, message.firmware, message.reset);
@@ -917,6 +931,10 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
   private async runMidiDfu(device: import('./types').MidiDfuDeviceInfo, firmware: string): Promise<void> {
     if (!firmware) throw new Error('请先选择用于 MIDI DFU 的 OTA .bin 固件');
     if (path.extname(firmware).toLowerCase() !== '.bin') throw new Error('MIDI DFU 需要选择 OTA .bin 固件');
+    let latestPercent = 0;
+    let latestDetail = '正在启动 MIDI DFU';
+    let completed = false;
+    this.post({ type: 'progress', action: 'midiDfu', percent: latestPercent, detail: latestDetail, active: true, completed: false });
     this.state.busy = 'midiDfu';
     this.post({ type: 'state', state: this.state });
     this.midiDfuOutput.clear();
@@ -927,11 +945,34 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
       await this.midiDfu.upload(
         device,
         firmware,
-        (percent, detail) => this.post({ type: 'progress', action: 'midiDfu', percent, detail }),
+        (percent, detail) => {
+          latestPercent = percent;
+          latestDetail = detail;
+          this.post({ type: 'progress', action: 'midiDfu', percent, detail, active: true, completed: false });
+        },
         (text) => this.midiDfuOutput.append(text)
       );
+      completed = true;
+      this.post({
+        type: 'progress',
+        action: 'midiDfu',
+        percent: 100,
+        detail: 'MIDI DFU 完成，设备身份与版本复核通过',
+        active: false,
+        completed: true
+      });
       this.notice('info', 'MIDI DFU 完成，设备身份与版本复核通过');
     } finally {
+      if (!completed) {
+        this.post({
+          type: 'progress',
+          action: 'midiDfu',
+          percent: latestPercent,
+          detail: latestDetail,
+          active: false,
+          completed: false
+        });
+      }
       this.state.busy = undefined;
       this.post({ type: 'state', state: this.state });
     }
@@ -1147,6 +1188,19 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
     };
     if (source) void source.postMessage(message);
     else this.post(message);
+  }
+
+  private postDfuSnapshot(source?: vscode.Webview): void {
+    const messages: ExtensionToWebview[] = [
+      { type: 'hidDevices', devices: this.hidDfuDevices },
+      { type: 'usbDfuDevices', devices: this.usbDfuDevices },
+      { type: 'midiDfuDevices', devices: this.midiDfuDevices }
+    ];
+    if (source) {
+      for (const message of messages) void source.postMessage(message);
+      return;
+    }
+    for (const message of messages) this.post(message);
   }
 
   private async exportCommunication(transport: CommunicationTransport, format: 'txt' | 'json'): Promise<void> {

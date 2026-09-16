@@ -17,7 +17,9 @@ import {
 } from './midiProtocol';
 
 const INFO_TIMEOUT_MS = 750;
-const ACK_TIMEOUT_MS = 3000;
+// 设备第一次写 DATA 时可能先擦除 Flash，现场耗时约 3.7 秒；5 秒可避免
+// 正常擦除被误判为丢包，同时仍保留同帧重试保护。
+const ACK_TIMEOUT_MS = 5000;
 const FINISH_TIMEOUT_MS = 30000;
 const RECONNECT_TIMEOUT_MS = 60000;
 const RECONNECT_INTERVAL_MS = 500;
@@ -199,13 +201,15 @@ export class MidiDfuService {
       onProgress(100, 'MIDI DFU 完成，设备身份与版本复核通过');
     } catch (error) {
       if (this.cancelled) throw new Error('MIDI DFU 已取消');
+      // 原始失败必须先于清理结果记录，否则“ABORT 未确认”会掩盖真正根因。
+      onLog(`错误：${error instanceof Error ? error.message : String(error)}\n`);
       if (transport && beginAttempted && !committing) {
         try {
           const client = new MidiDfuClient(transport, session, () => undefined);
           await client.exchange(MidiDfuCommand.Abort, sequence, Buffer.alloc(0), ACK_TIMEOUT_MS, 0);
-          onLog('ABORT 已发送\n');
-        } catch {
-          onLog('ABORT 未得到确认，连接将被关闭\n');
+          onLog('ABORT 已确认，连接将被关闭\n');
+        } catch (abortError) {
+          onLog(`ABORT 未得到确认，连接将被关闭：${abortError instanceof Error ? abortError.message : String(abortError)}\n`);
         }
       }
       throw error;

@@ -183,6 +183,7 @@ export type ExtensionToWebview =
 
 export type WebviewToExtension =
   | { type: 'ready' }
+  | { type: 'clientValidationError'; message: string }
   | { type: 'openPanel'; page: PanelPage }
   | { type: 'selectProject' }
   | { type: 'selectRecentProject'; path: string }

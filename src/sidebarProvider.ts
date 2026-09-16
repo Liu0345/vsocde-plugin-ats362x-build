@@ -279,6 +279,10 @@ export class Ats362xSidebarProvider implements vscode.WebviewViewProvider {
   private async handle(message: WebviewToExtension, source?: vscode.Webview): Promise<void> {
     try {
       switch (message.type) {
+        case 'clientValidationError':
+          this.notice('warning', message.message);
+          void vscode.window.showWarningMessage(`ATS362X：${message.message}`);
+          break;
         case 'ready':
         case 'refresh':
           await this.refresh();

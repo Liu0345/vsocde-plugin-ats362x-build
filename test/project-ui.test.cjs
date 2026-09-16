@@ -79,6 +79,19 @@ test('项目与编译独立布局且工具状态保留在工具页', () => {
   assert.match(style, /\.project-build-grid \{[^}]*align-items: start;/, '项目与固件编译两列高度变化必须互不拉伸');
 });
 
+test('操作按钮始终可点击并在点击后统一校验提示', () => {
+  const communication = fs.readFileSync(path.join(__dirname, '..', 'webview', 'src', 'CommunicationPage.tsx'), 'utf8');
+  const provider = fs.readFileSync(path.join(__dirname, '..', 'src', 'sidebarProvider.ts'), 'utf8');
+  const types = fs.readFileSync(path.join(__dirname, '..', 'src', 'types.ts'), 'utf8');
+
+  assert.doesNotMatch(source, /<button[^>]*disabled=/, '主界面的操作按钮不得根据前置条件禁用');
+  assert.doesNotMatch(communication, /<button[^>]*disabled=/, '通讯界面的连接和发送按钮不得禁用');
+  assert.match(source, /function guardAction[\s\S]*?type: 'clientValidationError'/);
+  assert.match(communication, /type: 'clientValidationError'/);
+  assert.match(types, /type: 'clientValidationError'; message: string/);
+  assert.match(provider, /case 'clientValidationError':[\s\S]*?showWarningMessage/);
+});
+
 test('烧录固件页继电器默认扫描，工具页不再显示继电器', () => {
   const toolsPage = source.match(/function ToolsPage[\s\S]*?function Card/)?.[0] ?? '';
   const relayCard = source.match(/function RelayCard[\s\S]*?function ToolsPage/)?.[0] ?? '';

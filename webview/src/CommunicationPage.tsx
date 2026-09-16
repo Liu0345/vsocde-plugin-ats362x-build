@@ -157,7 +157,14 @@ export function CommunicationPage({ transport, serialPorts, hidDevices, status, 
 
   const send = (command?: CommunicationQuickCommand): void => {
     const activePayload = command?.payload ?? payload;
-    if (!activePayload) return;
+    if (!status.connected) {
+      postMessage({ type: 'clientValidationError', message: `请先连接${transport === 'uart' ? '串口' : ' UAC HID 接口'}` });
+      return;
+    }
+    if (!activePayload) {
+      postMessage({ type: 'clientValidationError', message: '请先输入要发送的数据' });
+      return;
+    }
     postMessage({
       type: 'communicationSend',
       transport,
@@ -198,7 +205,10 @@ export function CommunicationPage({ transport, serialPorts, hidDevices, status, 
 
   const connect = (): void => {
     const selectedDevice = devices.find((device) => device.id === target);
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      postMessage({ type: 'clientValidationError', message: `请先扫描并选择${transport === 'uart' ? '串口' : ' UAC HID 接口'}` });
+      return;
+    }
     postMessage(transport === 'uart'
       ? { type: 'communicationConnect', transport, path: selectedDevice.path, baudRate, dataBits, stopBits, parity, flowControl, packetTimeoutMs: parsePacketTimeout(packetTimeoutMs) }
       : { type: 'communicationConnect', transport, path: selectedDevice.path, packetTimeoutMs: parsePacketTimeout(packetTimeoutMs) });
@@ -236,7 +246,7 @@ export function CommunicationPage({ transport, serialPorts, hidDevices, status, 
         <small className="mode-help">{hidLengthMode === 'fixed64' ? '每次发送都补零到完整 64 字节；接收仍显示设备实际报告长度。' : '按实际数据长度发送，最大不超过 64 字节报告。'}</small>
         <div className="columns"><label className="field"><span>Report ID</span><input type="text" inputMode="numeric" pattern="[0-9]*" value={reportId} onChange={(event) => { if (/^\d{0,3}$/.test(event.target.value)) setReportId(event.target.value); }} onBlur={() => setReportId(String(parseReportId(reportId)))} /></label><label className="field"><span>报告长度</span><input type="text" inputMode="numeric" pattern="[0-9]*" disabled={hidLengthMode === 'fixed64'} value={hidLengthMode === 'fixed64' ? '64' : reportLength} onChange={(event) => { if (/^\d{0,2}$/.test(event.target.value)) setReportLength(event.target.value); }} onBlur={() => setReportLength(String(parseReportLength(reportLength)))} /></label></div>
       </>}
-      <div className="button-row"><button disabled={!target} onClick={status.connected ? () => postMessage({ type: 'communicationDisconnect', transport }) : connect}>{status.connected ? (transport === 'uart' ? '断开串口' : '断开 HID') : (transport === 'uart' ? '连接串口' : '连接 HID')}</button></div>
+      <div className="button-row"><button onClick={status.connected ? () => postMessage({ type: 'communicationDisconnect', transport }) : connect}>{status.connected ? (transport === 'uart' ? '断开串口' : '断开 HID') : (transport === 'uart' ? '连接串口' : '连接 HID')}</button></div>
       <small className="connection-detail" title={status.target}>{status.detail}</small>
     </section>
 
@@ -246,13 +256,13 @@ export function CommunicationPage({ transport, serialPorts, hidDevices, status, 
       <div className="communication-send">
         <div className="communication-send-options"><select value={sendMode} onChange={(event) => setLinkedDataMode(event.target.value as DataMode)}><option value="text">普通字符串</option><option value="hex">十六进制</option></select><select value={lineEnding} disabled={sendMode === 'hex'} onChange={(event) => setLineEnding(event.target.value as LineEnding)}><option value="none">无换行</option><option value="cr">CR</option><option value="lf">LF</option><option value="crlf">CRLF</option></select><label><input type="checkbox" checked={autoSend} onChange={(event) => setAutoSend(event.target.checked)} />自动发送</label><input className="auto-send-interval" type="text" inputMode="numeric" pattern="[0-9]*" value={autoSendInterval} onChange={(event) => { if (/^\d{0,7}$/.test(event.target.value)) setAutoSendInterval(event.target.value); }} onBlur={() => setAutoSendInterval(String(parseAutoSendInterval(autoSendInterval)))} title="自动发送间隔（ms，20～3600000）" /></div>
         <textarea value={payload} onChange={(event) => setPayload(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') send(); }} placeholder={sendMode === 'hex' ? 'AA 55 01 02' : '输入要发送的字符串；Ctrl/⌘ + Enter 发送'} />
-        <div className="button-row"><button disabled={!status.connected || !payload} onClick={() => send()}>→ TX 发送</button><small>{transport === 'hid' && hidLengthMode === 'fixed64' ? '固定 64 字节报告' : '按实际长度发送'}</small></div>
+        <div className="button-row"><button onClick={() => send()}>→ TX 发送</button><small>{transport === 'hid' && hidLengthMode === 'fixed64' ? '固定 64 字节报告' : '按实际长度发送'}</small></div>
       </div>
     </section>
 
     <section className="card quick-command-card">
       <div className="communication-toolbar"><strong>快捷命令</strong><div><button onClick={addCommand}>新增命令</button><button className="secondary" onClick={() => postMessage({ type: 'communicationQuickCommandsImport' })}>导入命令</button><button className="secondary" onClick={() => postMessage({ type: 'communicationQuickCommandsExport' })}>导出命令</button></div></div>
-      <div className="quick-command-list">{transportCommands.length === 0 ? <p className="communication-empty">暂无快捷命令</p> : transportCommands.map((command) => <div className="quick-command" key={command.id}><input value={command.name} onChange={(event) => updateCommand(command.id, { name: event.target.value })} /><select value={command.mode} onChange={(event) => updateCommand(command.id, { mode: event.target.value as DataMode })}><option value="text">字符串</option><option value="hex">HEX</option></select><input value={command.payload} onChange={(event) => updateCommand(command.id, { payload: event.target.value })} placeholder="命令数据" /><select value={command.lineEnding} disabled={command.mode === 'hex'} onChange={(event) => updateCommand(command.id, { lineEnding: event.target.value as LineEnding })}><option value="none">无换行</option><option value="cr">CR</option><option value="lf">LF</option><option value="crlf">CRLF</option></select><button disabled={!status.connected || !command.payload} onClick={() => send(command)}>发送</button><button className="danger-ghost" onClick={() => saveCommands(quickCommands.filter((item) => item.id !== command.id))}>删除命令</button></div>)}</div>
+      <div className="quick-command-list">{transportCommands.length === 0 ? <p className="communication-empty">暂无快捷命令</p> : transportCommands.map((command) => <div className="quick-command" key={command.id}><input value={command.name} onChange={(event) => updateCommand(command.id, { name: event.target.value })} /><select value={command.mode} onChange={(event) => updateCommand(command.id, { mode: event.target.value as DataMode })}><option value="text">字符串</option><option value="hex">HEX</option></select><input value={command.payload} onChange={(event) => updateCommand(command.id, { payload: event.target.value })} placeholder="命令数据" /><select value={command.lineEnding} disabled={command.mode === 'hex'} onChange={(event) => updateCommand(command.id, { lineEnding: event.target.value as LineEnding })}><option value="none">无换行</option><option value="cr">CR</option><option value="lf">LF</option><option value="crlf">CRLF</option></select><button onClick={() => send(command)}>发送</button><button className="danger-ghost" onClick={() => saveCommands(quickCommands.filter((item) => item.id !== command.id))}>删除命令</button></div>)}</div>
     </section>
 
     <section className="card communication-filter-card">

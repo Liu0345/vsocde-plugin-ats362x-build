@@ -28,10 +28,11 @@ test('dfu-util progress parser handles carriage-return progress output', () => {
 
 test('USB DFU 页面不依赖已选择的项目目录', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'webview', 'src', 'main.tsx'), 'utf8');
-  const startLine = source.split(/\r?\n/).find((line) => line.includes('开始 USB DFU'));
+  const usbPage = source.match(/function UsbDfuPage[\s\S]*?function DfuPage/)?.[0] ?? '';
 
-  assert.ok(startLine, 'USB DFU 启动按钮必须存在');
-  assert.doesNotMatch(startLine, /projectPath/, 'USB DFU 不得被项目选择状态限制');
-  assert.match(startLine, /!device/, 'USB DFU 必须要求已选择目标设备');
-  assert.match(startLine, /!hasFirmware/, 'USB DFU 必须要求存在可用固件');
+  assert.match(usbPage, />开始 USB DFU<\/button>/, 'USB DFU 启动按钮必须存在');
+  assert.doesNotMatch(usbPage, /projectPath/, 'USB DFU 不得被项目选择状态限制');
+  assert.match(usbPage, /!device/, 'USB DFU 必须在点击后要求已选择目标设备');
+  assert.match(usbPage, /!hasFirmware/, 'USB DFU 必须在点击后要求存在可用固件');
+  assert.doesNotMatch(usbPage, /<button[^>]*disabled=/, '启动和扫描按钮不应因前置条件不可点击');
 });

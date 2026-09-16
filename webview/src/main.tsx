@@ -202,7 +202,7 @@ function App(): JSX.Element {
       <ToolRequirements tools={state.tools} page={page} />
       {page === 'project' && <div className="project-build-grid">
         <ProjectPage state={state} />
-        <BuildPage state={state} disabled={!state.projectPath} projectPath={state.projectPath} />
+        <BuildPage state={state} projectPath={state.projectPath} />
       </div>}
       {page === 'build' && <div className="flash-relay-grid">
         <FlashPage state={state} reservedSerialPorts={reservedSerialPorts} progress={progress} />
@@ -296,7 +296,7 @@ function ProjectPage({ state }: { state: State }): JSX.Element {
   </Card>;
 }
 
-function BuildPage({ state, disabled, projectPath }: { state: State; disabled: boolean; projectPath?: string }): JSX.Element {
+function BuildPage({ state, projectPath }: { state: State; projectPath?: string }): JSX.Element {
   const [host, setHost] = useState('builder-ubuntu');
   const [download, setDownload] = useState('ota-fw');
   const [board, setBoard] = useState('');
@@ -342,7 +342,7 @@ function BuildPage({ state, disabled, projectPath }: { state: State; disabled: b
       <Check label="保留远端目录" checked={keep} set={setKeep} />
       <Check label="生成 Map 摘要" checked={mapSummary} set={setMapSummary} />
     </div>
-    <div className="button-row"><button disabled={disabled} onClick={() => run('build', options)}>开始编译</button><button className="secondary" disabled={disabled} onClick={() => run('buildFlashVerify', options)}>编译 → 烧录 → 校验</button></div>
+    <div className="button-row"><button onClick={() => guardAction(projectPath ? undefined : '请先选择项目目录', () => run('build', options))}>开始编译</button><button className="secondary" onClick={() => guardAction(projectPath ? undefined : '请先选择项目目录', () => run('buildFlashVerify', options))}>编译 → 烧录 → 校验</button></div>
   </Card>;
 }
 
@@ -413,7 +413,13 @@ function FlashPage({
       <Check label="仅预演，不写设备" checked={dryRun} set={setDryRun} />
       {(busy || flashProgress.detail) && <TransferProgressBar progress={flashProgress} />}
       <div className="button-row">
-        <button disabled={flashQueued || (busy && !transferComplete) || !state.projectPath || !selectedFirmware} onClick={() => run('flash', { firmware: selectedFirmware, method, entry, verify, uart, baud, timeout, vidPid, shellPort: shellPort || uart, shellBaud, shellCmd, dryRun })}>{flashQueued ? '下一次烧录已排队' : transferComplete ? '开始烧录' : busy ? '正在烧录…' : '开始烧录'}</button>
+        <button onClick={() => guardAction(
+          flashQueued ? '下一次串口烧录已经排队，请等待当前任务完成' :
+            busy && !transferComplete ? '当前串口烧录仍在进行，可先取消当前烧录' :
+              !state.projectPath ? '请先选择项目目录' :
+                !selectedFirmware ? '请先选择需要烧录的固件' : undefined,
+          () => run('flash', { firmware: selectedFirmware, method, entry, verify, uart, baud, timeout, vidPid, shellPort: shellPort || uart, shellBaud, shellCmd, dryRun })
+        )}>{flashQueued ? '下一次烧录已排队' : transferComplete ? '开始烧录' : busy ? '正在烧录…' : '开始烧录'}</button>
         {busy && flashProgress.percent < 100 && <button className="danger" onClick={() => vscode.postMessage({ type: 'flashAbort' })}>取消烧录</button>}
       </div>
       <div className="flash-firmware-source"><PathValue label="当前固件来源" value={firmware} empty="未发现固件" /></div>
@@ -474,16 +480,19 @@ function UsbDfuPage({ state, devices, hidDevices, selectedFirmware, selectedDevi
     />}
   >
     <div className="callout">先按 USB Audio Class 进行设备筛选；若无法匹配到已识别的 UAC 设备，则回退显示全部 Runtime DFU 设备。传输时按 VID:PID 和 USB 物理路径锁定所选设备。单独选择的固件仅供本页面使用，不会改变其他功能的固件来源。</div>
-    <div className="button-row"><button className="secondary" disabled={busy} onClick={scanDfuDevices}>扫描 UAC 设备</button><span className="muted">发现 {devices.length} 个可用设备</span></div>
+    <div className="button-row"><button className="secondary" onClick={() => guardAction(busy ? 'USB DFU 正在进行，请等待完成或先取消' : undefined, scanDfuDevices)}>扫描 UAC 设备</button><span className="muted">发现 {devices.length} 个可用设备</span></div>
     <Field label="UAC 设备"><PlaceholderSelect disabled={busy} value={selectedDeviceKey} selectedLabel={deviceLabel} preferTail={false} onChange={(event) => onDeviceKeyChange(event.target.value)}><option value="">空白-选项</option>{devices.map((item) => {
       const companion = findCompanionDevice(item, hidDevices);
       return <option key={item.key} value={item.key}>{usbDfuDeviceLabel(item, companion)}</option>;
     })}</PlaceholderSelect></Field>
     {device && <div className="device-meta"><code>USB 路径 {device.usbPath}</code></div>}
-    <Field label="DFU 固件"><div className="input-action"><PlaceholderSelect disabled={busy} value={firmware} onChange={(event) => setFirmware(event.target.value)}><option value="">空白-选项</option>{state.discoveredFirmware.filter((file) => /\.(bin|dfu)$/i.test(file.path)).map((file) => <option key={file.path} value={file.path} title={file.path}>{formatFirmwareOption(file)}</option>)}</PlaceholderSelect><div className="inline-actions"><button className="secondary" disabled={busy} onClick={() => vscode.postMessage({ type: 'scanFirmware' })}>扫描</button><button className="secondary" disabled={busy} onClick={() => vscode.postMessage({ type: 'selectUsbDfuFirmware' })}>选择固件</button></div></div></Field>
+    <Field label="DFU 固件"><div className="input-action"><PlaceholderSelect disabled={busy} value={firmware} onChange={(event) => setFirmware(event.target.value)}><option value="">空白-选项</option>{state.discoveredFirmware.filter((file) => /\.(bin|dfu)$/i.test(file.path)).map((file) => <option key={file.path} value={file.path} title={file.path}>{formatFirmwareOption(file)}</option>)}</PlaceholderSelect><div className="inline-actions"><button className="secondary" onClick={() => guardAction(busy ? 'USB DFU 正在进行，请等待完成或先取消' : undefined, () => vscode.postMessage({ type: 'scanFirmware' }))}>扫描</button><button className="secondary" onClick={() => guardAction(busy ? 'USB DFU 正在进行，请等待完成或先取消' : undefined, () => vscode.postMessage({ type: 'selectUsbDfuFirmware' }))}>选择固件</button></div></div></Field>
     <Check label="传输完成后请求 USB 复位" checked={reset} set={setReset} />
     {(busy || usbProgress.detail) && <TransferProgressBar progress={usbProgress} />}
-    <div className="button-row"><button disabled={busy || !device || !hasFirmware} onClick={() => device && vscode.postMessage({ type: 'usbDfu', device, firmware, reset })}>开始 USB DFU</button>{busy && <button className="danger" onClick={() => vscode.postMessage({ type: 'usbDfuAbort' })}>取消</button>}</div>
+    <div className="button-row"><button onClick={() => guardAction(
+      busy ? 'USB DFU 正在进行，请等待完成或先取消' : !device ? '请先扫描并选择 UAC 设备' : !hasFirmware ? '请先选择用于 USB DFU 的 .bin 或 .dfu 固件' : undefined,
+      () => device && vscode.postMessage({ type: 'usbDfu', device, firmware, reset })
+    )}>开始 USB DFU</button>{busy && <button className="danger" onClick={() => vscode.postMessage({ type: 'usbDfuAbort' })}>取消</button>}</div>
   </Card>;
 }
 
@@ -566,14 +575,17 @@ function HidPage({ state, devices, usbDevices, progress, selectedDevicePath, onD
     />}
   >
     <div className="callout">HID DFU 不进入 ADFU 模式。设备必须已枚举普通 HID 接口，固件上需启用 HID 更新模块。先按 UAC 信息进行筛选，匹配失败时会回退显示全部候选设备。</div>
-    <div className="button-row"><button className="secondary" disabled={busy} onClick={scanDfuDevices}>扫描 UAC HID</button><span className="muted">发现 {devices.length} 个 UAC 厂商 HID 接口</span></div>
+    <div className="button-row"><button className="secondary" onClick={() => guardAction(busy ? 'HID DFU 正在进行，请等待完成或先取消' : undefined, scanDfuDevices)}>扫描 UAC HID</button><span className="muted">发现 {devices.length} 个 UAC 厂商 HID 接口</span></div>
     <Field label="HID 设备"><PlaceholderSelect disabled={busy} value={selectedDevicePath} selectedLabel={deviceLabel} preferTail={false} onChange={(e) => onDevicePathChange(e.target.value)}><option value="">空白-选项</option>{devices.map((item) => {
       const companion = findCompanionDevice(item, usbDevices);
       return <option key={item.path} value={item.path}>{hidDfuDeviceLabel(item, companion)}</option>;
     })}</PlaceholderSelect></Field>
-    <Field label="OTA .bin 固件"><div className="input-action"><PlaceholderSelect value={firmware} onChange={(e) => setFirmware(e.target.value)}><option value="">空白-选项</option>{firmwareCandidates.map((file) => <option key={file.path} value={file.path} title={file.path}>{formatFirmwareOption(file)}</option>)}</PlaceholderSelect><div className="inline-actions"><button className="secondary" disabled={busy} onClick={() => vscode.postMessage({ type: 'scanFirmware' })}>扫描</button><button className="secondary" disabled={busy} onClick={() => vscode.postMessage({ type: 'selectHidFirmware' })}>选择固件</button></div></div></Field>
+    <Field label="OTA .bin 固件"><div className="input-action"><PlaceholderSelect value={firmware} onChange={(e) => setFirmware(e.target.value)}><option value="">空白-选项</option>{firmwareCandidates.map((file) => <option key={file.path} value={file.path} title={file.path}>{formatFirmwareOption(file)}</option>)}</PlaceholderSelect><div className="inline-actions"><button className="secondary" onClick={() => guardAction(busy ? 'HID DFU 正在进行，请等待完成或先取消' : undefined, () => vscode.postMessage({ type: 'scanFirmware' }))}>扫描</button><button className="secondary" onClick={() => guardAction(busy ? 'HID DFU 正在进行，请等待完成或先取消' : undefined, () => vscode.postMessage({ type: 'selectHidFirmware' }))}>选择固件</button></div></div></Field>
     {(busy || hidProgress.detail) && <TransferProgressBar progress={hidProgress} />}
-    <div className="button-row"><button disabled={busy || !selectedDevicePath || !firmware} onClick={() => vscode.postMessage({ type: 'hidDfu', path: selectedDevicePath, firmware, expectedBcd: 0 })}>开始 HID DFU</button>{busy && <button className="danger" onClick={() => vscode.postMessage({ type: 'hidAbort', path: selectedDevicePath })}>取消</button>}</div>
+    <div className="button-row"><button onClick={() => guardAction(
+      busy ? 'HID DFU 正在进行，请等待完成或先取消' : !selectedDevicePath ? '请先扫描并选择 UAC HID 接口' : !firmware ? '请先选择用于 HID DFU 的 OTA .bin 固件' : undefined,
+      () => vscode.postMessage({ type: 'hidDfu', path: selectedDevicePath, firmware, expectedBcd: 0 })
+    )}>开始 HID DFU</button>{busy && <button className="danger" onClick={() => vscode.postMessage({ type: 'hidAbort', path: selectedDevicePath })}>取消</button>}</div>
   </Card>;
 }
 
@@ -641,20 +653,32 @@ function IdentityPage({
   }, [port, reservationResults]);
 
   const execute = (action: IdentityAction): void => {
-    vscode.postMessage({
-      type: 'identityAction',
-      request: {
-        action,
-        port,
-        baudRate: Number(baudRate),
-        username,
-        password,
-        rebootAfterWrite,
-        keepPortReserved,
-        commands,
-        customCommand
-      }
-    });
+    const authorizationMissing = action.startsWith('authorize') && (!username.trim() || !password);
+    guardAction(
+      busy
+        ? '身份认证操作正在进行，请等待完成或先取消'
+        : !port.trim()
+          ? '请先选择或输入串口'
+          : authorizationMissing
+            ? '授权操作需要输入账号和密码'
+            : action === 'runCustom' && !customCommand.trim()
+              ? '请先输入 Shell 命令'
+              : undefined,
+      () => vscode.postMessage({
+        type: 'identityAction',
+        request: {
+          action,
+          port,
+          baudRate: Number(baudRate),
+          username,
+          password,
+          rebootAfterWrite,
+          keepPortReserved,
+          commands,
+          customCommand
+        }
+      })
+    );
   };
   const setCommand = (key: keyof IdentityCommands, value: string): void => {
     setCommands((current) => ({ ...current, [key]: value }));
@@ -696,7 +720,7 @@ function IdentityPage({
                       disabled={busy}
                       onCommit={inspectIdentityPort}
                     />
-                    <button className="secondary" disabled={busy} onClick={() => vscode.postMessage({ type: 'listSerial' })}>扫描</button>
+                    <button className="secondary" onClick={() => guardAction(busy ? '身份认证操作正在进行，请等待完成或先取消' : undefined, () => vscode.postMessage({ type: 'listSerial' }))}>扫描</button>
                   </div>
                   <Check label="持续占用串口" checked={keepPortReserved} set={updatePortReservation} disabled={!port.trim()} />
                 </div>
@@ -729,7 +753,6 @@ function IdentityPage({
         title="算法身份授权"
         subtitle="使用 auth_mode 协议；授权、状态检查和清除均独立执行"
         status={results.algorithm}
-        busy={busy}
         onCheck={() => execute('checkAlgorithm')}
         onAuthorize={() => execute('authorizeAlgorithm')}
         onClear={() => execute('clearAlgorithm')}
@@ -739,7 +762,6 @@ function IdentityPage({
         title="SN 身份授权"
         subtitle="使用 device_id 协议；完整保留产品名中的空格"
         status={results.sn}
-        busy={busy}
         onCheck={() => execute('checkSn')}
         onAuthorize={() => execute('authorizeSn')}
         onClear={() => execute('clearSn')}
@@ -760,7 +782,7 @@ function IdentityPage({
           <CommandField label="SN 清除" value={commands.snClear} set={(value) => setCommand('snClear', value)} />
           <CommandField label="设备重启" value={commands.reboot} set={(value) => setCommand('reboot', value)} />
         </div>
-        <button className="ghost" disabled={busy} onClick={() => setCommands(defaultIdentityCommands)}>恢复默认命令</button>
+        <button className="ghost" onClick={() => guardAction(busy ? '身份认证操作正在进行，请等待完成或先取消' : undefined, () => setCommands(defaultIdentityCommands))}>恢复默认命令</button>
       </details>
     </Card>
 
@@ -771,7 +793,7 @@ function IdentityPage({
           <datalist id="identity-command-presets">
             {['device_id info', 'device_id sn status', 'device_id sn verify', 'auth_mode get_id', 'auth_mode get_auth_flag', 'kernel version', 'help'].map((command) => <option key={command} value={command} />)}
           </datalist>
-          <button className="secondary" disabled={busy || !port || !customCommand.trim()} onClick={() => execute('runCustom')}>执行</button>
+          <button className="secondary" onClick={() => execute('runCustom')}>执行</button>
         </div>
       </Field>
       {results.system?.fields?.response && <pre className="identity-output">{results.system.fields.response}</pre>}
@@ -779,7 +801,7 @@ function IdentityPage({
 
     <div className="identity-wide">
       <Card title="认证流程" subtitle="最新记录显示在最上方；授权数据、令牌和密码自动隐藏">
-        <div className="button-row identity-flow-actions"><span className="muted">共 {events.length} 条记录</span><button className="ghost" disabled={busy || events.length === 0} onClick={clearEvents}>清空记录</button></div>
+        <div className="button-row identity-flow-actions"><span className="muted">共 {events.length} 条记录</span><button className="ghost" onClick={() => guardAction(busy ? '身份认证操作正在进行，请等待完成或先取消' : events.length === 0 ? '当前没有可清空的认证记录' : undefined, clearEvents)}>清空记录</button></div>
         {events.length === 0 ? <p className="muted">选择一个授权操作后，这里会按顺序显示连接、读取、服务请求、写入和复核结果。</p> : <div className="identity-timeline">
           {events.map((event) => <div key={event.id} className={`identity-step ${event.level}`}>
             <span className="identity-step-dot" />
@@ -791,11 +813,10 @@ function IdentityPage({
   </>;
 }
 
-function IdentityAuthCard({ title, subtitle, status, busy, onCheck, onAuthorize, onClear }: {
+function IdentityAuthCard({ title, subtitle, status, onCheck, onAuthorize, onClear }: {
   title: string;
   subtitle: string;
   status?: IdentityResult;
-  busy: boolean;
   onCheck: () => void;
   onAuthorize: () => void;
   onClear: () => void;
@@ -807,9 +828,9 @@ function IdentityAuthCard({ title, subtitle, status, busy, onCheck, onAuthorize,
     </div>
     {status?.fields && <div className="device-meta">{Object.entries(status.fields).map(([key, value]) => <code key={key}>{key}={value}</code>)}</div>}
     <div className="button-row wrap identity-auth-actions">
-      <button className="secondary" disabled={busy} onClick={onCheck}>检查状态</button>
-      <button disabled={busy} onClick={onAuthorize}>开始授权</button>
-      <button className="danger-ghost" disabled={busy} onClick={onClear}>清除授权</button>
+      <button className="secondary" onClick={onCheck}>检查状态</button>
+      <button onClick={onAuthorize}>开始授权</button>
+      <button className="danger-ghost" onClick={onClear}>清除授权</button>
     </div>
   </Card>;
 }
@@ -846,8 +867,8 @@ function RelayCard({ state }: { state: State }): JSX.Element {
         {state.relayDevices.map((device) => <option key={device.path} value={device.path}>{relayDeviceLabel(device)}</option>)}
       </PlaceholderSelect>
       <div className="inline-actions">
-        <button className="secondary" disabled={Boolean(state.relayBusy)} onClick={() => vscode.postMessage({ type: 'listRelays' })}>扫描</button>
-        <button className="secondary" disabled={!relayPath || Boolean(state.relayBusy)} onClick={() => vscode.postMessage({ type: 'relayRead', path: relayPath })}>读取状态</button>
+        <button className="secondary" onClick={() => guardAction(state.relayBusy ? '继电器操作正在进行，请稍候' : undefined, () => vscode.postMessage({ type: 'listRelays' }))}>扫描</button>
+        <button className="secondary" onClick={() => guardAction(state.relayBusy ? '继电器操作正在进行，请稍候' : !relayPath ? '请先扫描并选择 USB HID 继电器' : undefined, () => vscode.postMessage({ type: 'relayRead', path: relayPath }))}>读取状态</button>
       </div>
     </div>
     <div className="relay-status">
@@ -862,8 +883,7 @@ function RelayCard({ state }: { state: State }): JSX.Element {
           key={channel}
           label={`CH${channel}`}
           checked={checked}
-          disabled={!relayPath || Boolean(state.relayBusy)}
-          set={(enabled) => vscode.postMessage({ type: 'relayChannel', path: relayPath, channel, enabled })}
+          set={(enabled) => guardAction(state.relayBusy ? '继电器操作正在进行，请稍候' : !relayPath ? '请先扫描并选择 USB HID 继电器' : undefined, () => vscode.postMessage({ type: 'relayChannel', path: relayPath, channel, enabled }))}
         />;
       })}
     </div>
@@ -892,12 +912,12 @@ function ToolsPage({ state, notices, reservedSerialPorts, progress }: { state: S
     </Card>
     <Card title="诊断与设备工具" subtitle="常用 Baton / Actions Flash 操作">
       <div className="action-grid">
-        <button disabled={!state.projectPath} onClick={() => run('verify', {})}>校验启动</button>
-        <button className="secondary" disabled={!state.projectPath} onClick={() => run('doctor', {})}>环境诊断</button>
-        <button className="secondary" disabled={!state.projectPath} onClick={() => run('discover', {})}>发现设备</button>
-        <button className="secondary" disabled={!state.projectPath} onClick={() => run('status', {})}>项目状态</button>
-        <button className="secondary" disabled={!state.projectPath} onClick={() => run('listAdfu', {})}>列出 ADFU</button>
-        <button className="secondary" disabled={!state.projectPath} onClick={() => run('extractFw', {})}>解包 .fw</button>
+        <button onClick={() => guardAction(!state.projectPath ? '请先选择项目目录' : undefined, () => run('verify', {}))}>校验启动</button>
+        <button className="secondary" onClick={() => guardAction(!state.projectPath ? '请先选择项目目录' : undefined, () => run('doctor', {}))}>环境诊断</button>
+        <button className="secondary" onClick={() => guardAction(!state.projectPath ? '请先选择项目目录' : undefined, () => run('discover', {}))}>发现设备</button>
+        <button className="secondary" onClick={() => guardAction(!state.projectPath ? '请先选择项目目录' : undefined, () => run('status', {}))}>项目状态</button>
+        <button className="secondary" onClick={() => guardAction(!state.projectPath ? '请先选择项目目录' : undefined, () => run('listAdfu', {}))}>列出 ADFU</button>
+        <button className="secondary" onClick={() => guardAction(!state.projectPath ? '请先选择项目目录' : undefined, () => run('extractFw', {}))}>解包 .fw</button>
       </div>
     </Card>
     <Card title="全擦除 Flash" subtitle="危险操作：执行前插件会再次弹窗确认">
@@ -907,7 +927,7 @@ function ToolsPage({ state, notices, reservedSerialPorts, progress }: { state: S
       <Check label="仅预演，不擦除" checked={dryRun} set={setDryRun} />
       {(busy || eraseProgress.detail) && <TransferProgressBar progress={eraseProgress} />}
       <div className="button-row">
-        <button className="danger" disabled={!state.projectPath || busy} onClick={() => run('erase', { entry, size, timeout, vidPid, shellPort: entry === 'shell' ? shellPort : '', shellBaud: entry === 'shell' ? shellBaud : '', shellCmd: entry === 'shell' ? shellCmd : '', dryRun })}>{dryRun ? '预演全擦除' : '全擦除 Flash'}</button>
+        <button className="danger" onClick={() => guardAction(busy ? '当前有操作正在进行，请等待完成或先取消' : !state.projectPath ? '请先选择项目目录' : undefined, () => run('erase', { entry, size, timeout, vidPid, shellPort: entry === 'shell' ? shellPort : '', shellBaud: entry === 'shell' ? shellBaud : '', shellCmd: entry === 'shell' ? shellCmd : '', dryRun }))}>{dryRun ? '预演全擦除' : '全擦除 Flash'}</button>
         {erasing && <button className="danger" onClick={() => vscode.postMessage({ type: 'eraseAbort' })}>取消全擦除</button>}
       </div>
     </Card>
@@ -1084,6 +1104,14 @@ function SerialPortControl({ value, set, ports, emptyLabel, reserved }: { value:
   </div>;
 }
 function PathValue({ label, value, empty }: { label: string; value?: string; empty: string }): JSX.Element { return <div className="path-value"><span>{label}</span><code title={value}>{value ?? empty}</code></div>; }
+function guardAction(problem: string | undefined, action: () => void): void {
+  if (problem) {
+    vscode.postMessage({ type: 'clientValidationError', message: problem });
+    return;
+  }
+  action();
+}
+
 function run(action: string, options: Record<string, string | boolean>): void { vscode.postMessage({ type: 'run', request: { action, options } }); }
 function checkSerialPort(port: string): void { if (port.trim()) vscode.postMessage({ type: 'checkSerialPort', port }); }
 function scanDfuDevices(): void {
